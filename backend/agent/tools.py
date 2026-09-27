@@ -8,7 +8,28 @@ from backend.config import DEFAULT_TIMEZONE
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 UTC_TZ = ZoneInfo("UTC")
-BASE_DATE = datetime.date(2026, 9, 1)
+
+_BASE_DATE_CACHE = None
+
+def get_base_date() -> datetime.date:
+    """
+    Dynamically anchors Day 1 to the actual earliest sensor reading in TimescaleDB.
+    Enables arbitrary multi-week, monthly, or historical datasets without hardcoding.
+    """
+    global _BASE_DATE_CACHE
+    if _BASE_DATE_CACHE:
+        return _BASE_DATE_CACHE
+    try:
+        from backend.database import get_simulated_time_bounds
+        bounds = get_simulated_time_bounds()
+        if bounds.get("has_data") and "min_bkk" in bounds:
+            date_str = bounds["min_bkk"].split(" ")[0]
+            _BASE_DATE_CACHE = datetime.date.fromisoformat(date_str)
+            return _BASE_DATE_CACHE
+    except Exception:
+        pass
+    _BASE_DATE_CACHE = datetime.date(2026, 9, 1)
+    return _BASE_DATE_CACHE
 
 def parse_bangkok_time(time_str: str) -> datetime.datetime:
     """
@@ -17,13 +38,14 @@ def parse_bangkok_time(time_str: str) -> datetime.datetime:
     """
     time_str = time_str.strip()
     
-    # Check for "Day N HH:MM"
-    m_day = re.match(r"(?i)day\s*([1-7])(?:\s+(\d{1,2}):(\d{2}))?", time_str)
+    # Check for "Day N HH:MM" (scalable to any day number: Day 1, Day 14, Day 30)
+    m_day = re.match(r"(?i)day\s*(\d+)(?:\s+(\d{1,2}):(\d{2}))?", time_str)
     if m_day:
         day_num = int(m_day.group(1))
         hour = int(m_day.group(2)) if m_day.group(2) else 0
         minute = int(m_day.group(3)) if m_day.group(3) else 0
-        target_date = BASE_DATE + datetime.timedelta(days=day_num - 1)
+        base_date = get_base_date()
+        target_date = base_date + datetime.timedelta(days=day_num - 1)
         bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
         return bkk_dt.astimezone(UTC_TZ)
 

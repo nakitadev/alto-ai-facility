@@ -13,7 +13,23 @@ MODEL_PRICING = {
 }
 
 def calculate_cost(model_name: str, tokens_in: int, tokens_out: int) -> float:
-    pricing = MODEL_PRICING.get(model_name, MODEL_PRICING["default"])
+    """
+    Dynamically computes cost. Automatically identifies free-tier endpoints,
+    System 1 micro-judgments, and matching commercial model families.
+    """
+    m_lower = model_name.lower()
+    if ":free" in m_lower or "free" in m_lower or "local" in m_lower or "calibrated" in m_lower:
+        return 0.0
+    if "typesafe" in m_lower or "jev" in m_lower:
+        return 0.00005
+
+    pricing = MODEL_PRICING.get(model_name)
+    if not pricing:
+        for k, v in MODEL_PRICING.items():
+            if k in model_name:
+                pricing = v
+                break
+    pricing = pricing or MODEL_PRICING["default"]
     cost = (tokens_in / 1_000_000.0 * pricing["input"]) + (tokens_out / 1_000_000.0 * pricing["output"])
     return round(cost, 6)
 
