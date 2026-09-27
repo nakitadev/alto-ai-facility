@@ -16,6 +16,7 @@ try:
         send_to_logfire='if-token-present',
         console=logfire.ConsoleOptions(min_log_level='info')
     )
+    logfire.instrument_pydantic_ai()
 except Exception:
     pass
 
