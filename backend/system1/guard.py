@@ -3,7 +3,7 @@ import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
 from backend.database import execute_insert
-from backend.config import DEFAULT_TIMEZONE, TYPESAFE_API_KEY, TYPESAFE_BASE_URL
+from backend.config import DEFAULT_TIMEZONE, TYPESAFE_API_KEY
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 
@@ -55,8 +55,6 @@ class JevSystemOneGuard:
 
     def __init__(self):
         self.api_key = TYPESAFE_API_KEY
-        raw_url = TYPESAFE_BASE_URL or "https://api.typesafe.ai"
-        self.base_url = raw_url.rstrip("/").removesuffix("/v1")
 
     def analyze_query(self, user_prompt: str) -> Dict[str, Any]:
         """
@@ -76,7 +74,7 @@ class JevSystemOneGuard:
         return self._call_calibrated_jev(user_prompt)
 
     def _call_live_jev(self, user_prompt: str) -> Dict[str, Any]:
-        with TypeSafeClient(api_key=self.api_key, base_url=self.base_url) as client:
+        with TypeSafeClient(api_key=self.api_key) as client:
             resp = client.system_one(
                 state={"user_prompt": user_prompt},
                 questions={
@@ -112,7 +110,6 @@ class JevSystemOneGuard:
                     "intent": Choice(
                         instructions="What is the primary operational intent?",
                         criteria={
-                            "greeting": "A greeting, hello, hi, introduction, or general conversational pleasantry",
                             "energy_aggregation": "Calculates electrical energy consumption or comparisons",
                             "sensor_telemetry": "Queries machine status, temperature, or fan speed",
                             "ai_decision_log": "Asks what the AI optimizer did or why it acted",
@@ -166,8 +163,6 @@ class JevSystemOneGuard:
             chosen_intent = "unanswerable"
         elif p_write > 0.7:
             chosen_intent = "write_command"
-        elif any(w in prompt_lower.split() for w in ["hello", "hi", "hey"]) or prompt_lower.strip() in ["good morning", "good afternoon", "sawasdee"]:
-            chosen_intent = "greeting"
         elif "energy" in prompt_lower or "save" in prompt_lower or "kwh" in prompt_lower:
             chosen_intent = "energy_aggregation"
         elif "decision" in prompt_lower or "what did the ai do" in prompt_lower:
@@ -198,21 +193,6 @@ class JevSystemOneGuard:
         severity: float = 0.0
     ) -> Dict[str, Any]:
         prompt_lower = user_prompt.lower()
-
-        # 0. Fast Greeting Route (<500ms via Jev Intent Classification)
-        if chosen_intent == "greeting" and confidence_score >= 0.70:
-            return {
-                "guard_triggered": True,
-                "intent": "GREETING",
-                "provider": provider,
-                "jev_confidence": {"confidence": confidence_score},
-                "immediate_response": (
-                    "Hello Khun Somchai! I am your AI Energy Assistant for Bangkok Commercial Tower. "
-                    "I can help you monitor electrical power (kW), inspect machine temperatures, "
-                    "audit AI optimization decisions, review facility manuals, or propose HVAC control adjustments. "
-                    "How can I assist you today?"
-                )
-            }
         
         # 1. Injection tripwire
         if p_injection >= 0.70:
