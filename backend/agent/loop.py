@@ -5,11 +5,24 @@ from typing import Dict, Any, List, AsyncGenerator
 
 os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
 
+import logfire
+from backend.config import OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL, LOGFIRE_TOKEN, LOGFIRE_SERVICE_NAME
+
+# Ensure Logfire is configured even when running standalone scripts or evaluation runner
+try:
+    logfire.configure(
+        service_name=LOGFIRE_SERVICE_NAME,
+        token=LOGFIRE_TOKEN,
+        send_to_logfire='if-token-present',
+        console=logfire.ConsoleOptions(min_log_level='info')
+    )
+except Exception:
+    pass
+
 from pydantic_ai import Agent
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.openai import OpenAIChatModel
 
-from backend.config import OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
 from backend.database import get_simulated_time_bounds, get_simulated_time_bounds_async
 from backend.system1.guard import system1_guard, get_machine_registry, get_machine_registry_async
 from backend.agent.tools import (
@@ -52,32 +65,40 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
     1. System 1 (Jev AI via AsyncTypeSafeClient): Non-blocking <90ms safety tripwires
     2. System 2 (PydanticAI): Native async LLM tool execution over TimescaleDB
     """
-    start_time = time.time()
-    
-    # 1. System 1 (Jev AI Fast Guard - Async)
-    guard = await system1_guard.analyze_query(user_prompt)
-    if guard["guard_triggered"]:
-        latency_ms = (time.time() - start_time) * 1000.0
-        await record_llm_call_async(
-            conversation_id=conversation_id,
-            model_name=guard.get("provider", "Jev-SystemOne"),
-            tokens_in=len(user_prompt.split()),
-            tokens_out=len(guard["immediate_response"].split()),
-            latency_ms=latency_ms,
-            intent_detected=guard["intent"],
-            tools_called=[]
-        )
-        return {
-            "response": guard["immediate_response"],
-            "tool_calls": [],
-            "tokens_in": 0,
-            "tokens_out": 0,
-            "latency_ms": round(latency_ms, 2),
-            "guard_tripwire": guard["intent"],
-            "system_one_provider": guard.get("provider")
-        }
+    with logfire.span("alto.run_agent_loop", user_prompt=user_prompt, conversation_id=conversation_id) as trace_span:
+        start_time = time.time()
+        
+        # 1. System 1 (Jev AI Fast Guard - Async)
+        with logfire.span("alto.system1_guard") as s1_span:
+            guard = await system1_guard.analyze_query(user_prompt)
+            guard_ms = (time.time() - start_time) * 1000.0
+            s1_span.set_attribute("provider", guard.get("provider"))
+            s1_span.set_attribute("intent", guard.get("intent"))
+            s1_span.set_attribute("guard_triggered", guard["guard_triggered"])
+            s1_span.set_attribute("latency_ms", guard_ms)
 
-    # 2. System 2 (Live PydanticAI Agent - Async)
+        if guard["guard_triggered"]:
+            await record_llm_call_async(
+                conversation_id=conversation_id,
+                model_name=guard.get("provider", "Jev-SystemOne"),
+                tokens_in=len(user_prompt.split()),
+                tokens_out=len(guard["immediate_response"].split()),
+                latency_ms=guard_ms,
+                intent_detected=guard["intent"],
+                tools_called=[]
+            )
+            return {
+                "response": guard["immediate_response"],
+                "tool_calls": [],
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "latency_ms": round(guard_ms, 2),
+                "system1_latency_ms": round(guard_ms, 2),
+                "guard_tripwire": guard["intent"],
+                "system_one_provider": guard.get("provider")
+            }
+
+        # 2. System 2 (Live PydanticAI Agent - Async)
     time_bounds = await get_simulated_time_bounds_async()
     machines, _ = await get_machine_registry_async()
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
@@ -125,6 +146,7 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
         "tokens_in": in_tokens,
         "tokens_out": out_tokens,
         "latency_ms": round(latency_ms, 2),
+        "system1_latency_ms": round(guard_ms, 2),
         "guard_tripwire": None,
         "framework": "PydanticAI"
     }
@@ -134,29 +156,37 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
     ASGI Server-Sent Events (SSE) streaming generator.
     Streams System 1 safety guard status followed by token-by-token System 2 reasoning.
     """
-    start_time = time.time()
-    
-    # 1. System 1 Guard
-    guard = await system1_guard.analyze_query(user_prompt)
-    if guard["guard_triggered"]:
-        latency_ms = (time.time() - start_time) * 1000.0
-        await record_llm_call_async(
-            conversation_id=conversation_id,
-            model_name=guard.get("provider", "Jev-SystemOne"),
-            tokens_in=len(user_prompt.split()),
-            tokens_out=len(guard["immediate_response"].split()),
-            latency_ms=latency_ms,
-            intent_detected=guard["intent"],
-            tools_called=[]
-        )
-        yield f"data: {json.dumps({'type': 'guard', 'tripwire': guard['intent'], 'latency_ms': round(latency_ms, 2), 'provider': guard.get('provider')})}\n\n"
-        yield f"data: {json.dumps({'type': 'token', 'content': guard['immediate_response']})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'response': guard['immediate_response'], 'tool_calls': [], 'latency_ms': round(latency_ms, 2)})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
+    with logfire.span("alto.stream_agent_loop", user_prompt=user_prompt, conversation_id=conversation_id) as trace_span:
+        start_time = time.time()
+        
+        # 1. System 1 Guard
+        with logfire.span("alto.system1_guard") as s1_span:
+            guard = await system1_guard.analyze_query(user_prompt)
+            guard_ms = (time.time() - start_time) * 1000.0
+            s1_span.set_attribute("provider", guard.get("provider"))
+            s1_span.set_attribute("intent", guard.get("intent"))
+            s1_span.set_attribute("guard_triggered", guard["guard_triggered"])
+            s1_span.set_attribute("latency_ms", guard_ms)
 
-    # Yield clean guard status
-    yield f"data: {json.dumps({'type': 'guard', 'tripwire': None, 'intent': guard.get('intent', 'ANALYTICAL'), 'provider': guard.get('provider')})}\n\n"
+        if guard["guard_triggered"]:
+            latency_ms = (time.time() - start_time) * 1000.0
+            await record_llm_call_async(
+                conversation_id=conversation_id,
+                model_name=guard.get("provider", "Jev-SystemOne"),
+                tokens_in=len(user_prompt.split()),
+                tokens_out=len(guard["immediate_response"].split()),
+                latency_ms=latency_ms,
+                intent_detected=guard["intent"],
+                tools_called=[]
+            )
+            yield f"data: {json.dumps({'type': 'guard', 'tripwire': guard['intent'], 'latency_ms': round(latency_ms, 2), 'provider': guard.get('provider')})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': guard['immediate_response']})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'response': guard['immediate_response'], 'tool_calls': [], 'latency_ms': round(latency_ms, 2)})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        # Yield clean guard status
+        yield f"data: {json.dumps({'type': 'guard', 'tripwire': None, 'intent': guard.get('intent', 'ANALYTICAL'), 'provider': guard.get('provider'), 'latency_ms': round(guard_ms, 2)})}\n\n"
 
     # 2. System 2 Agent Run Stream
     time_bounds = await get_simulated_time_bounds_async()
@@ -204,7 +234,7 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
             tools_called=tools_called
         )
 
-        yield f"data: {json.dumps({'type': 'done', 'response': str(final_out), 'tool_calls': executed_tools, 'tokens_in': in_tokens, 'tokens_out': out_tokens, 'latency_ms': round(latency_ms, 2)}, default=str)}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'response': str(final_out), 'tool_calls': executed_tools, 'tokens_in': in_tokens, 'tokens_out': out_tokens, 'system1_latency_ms': round(guard_ms, 2), 'latency_ms': round(latency_ms, 2)}, default=str)}\n\n"
         yield "data: [DONE]\n\n"
 
 

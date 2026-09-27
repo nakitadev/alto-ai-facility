@@ -6,7 +6,17 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.config import BACKEND_HOST, BACKEND_PORT
+import logfire
+from backend.config import BACKEND_HOST, BACKEND_PORT, LOGFIRE_TOKEN, LOGFIRE_SERVICE_NAME
+
+# Initialize Logfire Distributed Observability
+logfire.configure(
+    service_name=LOGFIRE_SERVICE_NAME,
+    token=LOGFIRE_TOKEN,
+    send_to_logfire='if-token-present',
+    console=logfire.ConsoleOptions(min_log_level='info')
+)
+
 from backend.database import (
     get_simulated_time_bounds,
     get_simulated_time_bounds_async,
@@ -23,6 +33,7 @@ async def lifespan(app: FastAPI):
     # ASGI Lifespan Startup: Non-blocking health check
     time_bounds = await get_simulated_time_bounds_async()
     print(f"[ASGI Server Ready] TimescaleDB connected. Data range: Day 1 - Day {time_bounds.get('days_available', 7)}")
+    logfire.info("ASGI Server Ready with Logfire tracing", days_available=time_bounds.get('days_available', 7))
     yield
     print("[ASGI Server Shutdown] Graceful termination complete.")
 
@@ -32,6 +43,10 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan
 )
+
+# Instrument FastAPI and PydanticAI with Logfire
+logfire.instrument_fastapi(app)
+logfire.instrument_pydantic_ai()
 
 # Enable CORS for local Streamlit / Frontend interaction
 app.add_middleware(
@@ -164,6 +179,37 @@ async def get_ledger():
     Returns comprehensive usage and cost analytics for Somchai's boss asynchronously.
     """
     return await get_ledger_summary_async()
+
+@app.get("/api/analytics/daily_energy")
+async def get_daily_energy():
+    """
+    Returns daily building electrical energy consumption across Days 1–7.
+    """
+    rows = await query_db_async("""
+        SELECT 
+            EXTRACT(DAY FROM time)::int as day_num,
+            ROUND(SUM(power_kw * (5.0/60.0))::numeric, 1)::float as total_kwh
+        FROM sensor_readings
+        WHERE EXTRACT(DAY FROM time) BETWEEN 1 AND 7
+        GROUP BY day_num
+        ORDER BY day_num;
+    """)
+    return {"daily_energy": [dict(r) for r in rows]}
+
+@app.get("/api/analytics/machine_breakdown")
+async def get_machine_breakdown():
+    """
+    Returns 7-day cumulative energy consumption by equipment.
+    """
+    rows = await query_db_async("""
+        SELECT 
+            machine_name,
+            ROUND(SUM(power_kw * (5.0/60.0))::numeric, 1)::float as total_kwh
+        FROM sensor_readings
+        GROUP BY machine_name
+        ORDER BY total_kwh DESC;
+    """)
+    return {"machines": [dict(r) for r in rows]}
 
 if __name__ == "__main__":
     import uvicorn

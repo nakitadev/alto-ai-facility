@@ -28,3 +28,7 @@ BACKEND_HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Asia/Bangkok")
 DOCS_DIR = ROOT_DIR / "docs"
+
+# Logfire Observability & Tracing Configuration
+LOGFIRE_TOKEN = os.getenv("LOGFIRE_TOKEN", None)
+LOGFIRE_SERVICE_NAME = os.getenv("LOGFIRE_SERVICE_NAME", "alto-tech-ai-engineer")

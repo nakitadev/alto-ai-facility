@@ -8,3 +8,4 @@ python-dotenv>=1.0.1
 requests>=2.32.0
 typesafe-sdk>=0.7.0
 pydantic-ai>=2.50.0
+logfire[fastapi]>=5.1.1
