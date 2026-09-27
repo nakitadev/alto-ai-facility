@@ -57,9 +57,13 @@ make eval
 ```
 
 ### Key Architectural Pillars:
-1. **Dual-Process Architecture (Problem 3 Option E & A)**:
-   * **System 1 (Fast Guard)**: Evaluates input in <90ms, intercepting dangerous physical commands, unmonitored sensors, or adversarial attacks before invoking expensive LLM generation.
-   * **System 2 (Deliberative LLM)**: Communicates through structured domain tools, synthesizing grounded explanations from database evidence.
+1. **Dual-Process Architecture with Jev AI (Problem 3 Option E & A)**:
+   * **System 1 (Jev AI via `typesafe-sdk`)**: TypeSafe AI's non-autoregressive decision model evaluating questions via typed primitives (`Noul` yes/no probabilities and `Choice` categorical selection) in <90ms.
+     * `is_write_action`: `Noul` checking if user requests machine shutdown/setpoint changes.
+     * `is_unmonitored_sensor`: `Noul` checking if user asks for humidity, air quality, etc.
+     * `is_prompt_injection`: `Noul` checking for adversarial prompt injection patterns.
+     * `intent`: `Choice` selecting the operational category (`energy_aggregation`, `sensor_telemetry`, `ai_decision_log`, etc.).
+   * **System 2 (Deliberative LLM)**: OpenRouter-swappable conversational agent executing bounded domain tools and synthesizing explanations from TimescaleDB evidence.
 2. **Deterministic Energy Accounting**:
    * Instantaneous power readings ($kW$) are converted to electrical energy ($kWh$) via continuous in-engine integration:
      $$\text{Energy (kWh)} = \sum \text{power\_kw} \times \frac{5}{60}$$
