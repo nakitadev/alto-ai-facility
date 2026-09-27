@@ -22,6 +22,8 @@ services:
     build: .
     container_name: altotech_seed
     command: python db/seed.py
+    volumes:
+      - ./:/app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-building_db}
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Asia/Bangkok}
@@ -36,6 +38,8 @@ services:
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./:/app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-building_db}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -53,6 +57,8 @@ services:
     command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
     ports:
       - "${FRONTEND_PORT:-8501}:8501"
+    volumes:
+      - ./:/app
     environment:
       BACKEND_API_URL: http://backend:8000
     depends_on:

@@ -150,7 +150,8 @@ def query_sensor_readings(machine_name: str, start_time: str, end_time: str, met
             ROUND(AVG(speed)::numeric, 2) AS avg_speed_pct,
             COUNT(*) AS reading_count
         FROM sensor_readings
-        WHERE machine_name = %s AND time >= %s AND time <= %s;
+        WHERE machine_name = %s AND time >= %s AND time <= %s
+        GROUP BY machine_name;
     """
     row = query_db(sql, (machine_name, start_utc, end_utc), fetchone=True)
     if not row or row["reading_count"] == 0:
