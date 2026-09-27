@@ -79,7 +79,35 @@ def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv") -> D
     model = OpenAIChatModel(OPENROUTER_MODEL, provider=provider)
     agent = Agent(model, system_prompt=prompt, tools=BUILDING_TOOLS)
 
-    run_res = agent.run_sync(user_prompt)
+    try:
+        run_res = agent.run_sync(user_prompt)
+    except Exception as e:
+        latency_ms = (time.time() - start_time) * 1000.0
+        err_msg = (
+            f"⚠️ OpenRouter Upstream Notice: Model '{OPENROUTER_MODEL}' "
+            f"encountered an upstream issue ({type(e).__name__}: {str(e)}). "
+            f"OpenRouter free-tier models can experience upstream provider rate-limits or temporary load spikes. "
+            f"Please retry in a moment or adjust OPENROUTER_MODEL in .env."
+        )
+        record_llm_call(
+            conversation_id=conversation_id,
+            model_name=f"PydanticAI-{OPENROUTER_MODEL}-Error",
+            tokens_in=0,
+            tokens_out=0,
+            latency_ms=latency_ms,
+            intent_detected="ERROR",
+            tools_called=[]
+        )
+        return {
+            "response": err_msg,
+            "tool_calls": [],
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "latency_ms": round(latency_ms, 2),
+            "guard_tripwire": None,
+            "framework": "PydanticAI (Upstream Error)"
+        }
+
     latency_ms = (time.time() - start_time) * 1000.0
 
     executed_tools = []

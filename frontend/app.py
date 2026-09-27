@@ -202,7 +202,7 @@ if user_input:
                 resp = requests.post(
                     f"{BACKEND_URL}/api/chat",
                     json={"message": user_input, "conversation_id": "somchai_console_ui"},
-                    timeout=30
+                    timeout=90
                 )
                 if resp.status_code == 200:
                     data = resp.json()
