@@ -122,13 +122,14 @@ def query_energy_aggregates(start_time: str, end_time: str, machine_name: Option
             LIMIT 30;
         """
         rows = query_db(sql, tuple(params))
+        base_date = get_base_date()
         return {
             "period": f"{start_time} to {end_time}",
             "group_by": "day",
             "daily_kwh": [{
                 "date": str(r["bangkok_date"]),
                 "kwh": float(r["total_kwh"]),
-                "day_number": (r["bangkok_date"] - BASE_DATE).days + 1
+                "day_number": (r["bangkok_date"] - base_date).days + 1
             } for r in rows]
         }
 
