@@ -7,14 +7,16 @@ from backend.config import DEFAULT_TIMEZONE, TYPESAFE_API_KEY
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 
-# Known building machines
-MACHINE_NAMES = [
+import time
+
+# Fallback defaults if database is unreachable
+DEFAULT_MACHINE_NAMES = [
     "AC-L1", "AC-L2", "AC-L3",
     "AC-S1", "AC-S2", "AC-S3", "AC-S4", "AC-S5",
     "FAN-01", "FAN-02", "FAN-03", "FAN-04"
 ]
 
-ZONE_ALIASES = {
+DEFAULT_ZONE_ALIASES = {
     "lobby": "AC-L1",
     "atrium": "AC-L1",
     "zone a": "AC-L1",
@@ -35,6 +37,48 @@ ZONE_ALIASES = {
     "basement": "FAN-01",
     "parking": "FAN-01",
 }
+
+_MACHINE_REGISTRY_CACHE = None
+_CACHE_TIMESTAMP = 0.0
+
+def get_machine_registry() -> tuple[list[str], dict[str, str]]:
+    """
+    Dynamically fetches machines and zone aliases from the database with 5-minute caching.
+    Ensures zero-code scalability when new equipment or zones are added to PostgreSQL.
+    """
+    global _MACHINE_REGISTRY_CACHE, _CACHE_TIMESTAMP
+    now = time.time()
+    if _MACHINE_REGISTRY_CACHE and (now - _CACHE_TIMESTAMP < 300.0):
+        return _MACHINE_REGISTRY_CACHE
+
+    try:
+        from backend.database import get_registered_machines
+        machines = get_registered_machines()
+    except Exception:
+        machines = []
+
+    if not machines:
+        return DEFAULT_MACHINE_NAMES, DEFAULT_ZONE_ALIASES
+
+    names = [m["machine_name"] for m in machines]
+    aliases = dict(DEFAULT_ZONE_ALIASES)
+
+    for m in machines:
+        m_name = m["machine_name"]
+        aliases[m_name.lower()] = m_name
+        zone = m.get("zone", "")
+        if zone:
+            aliases[zone.lower()] = m_name
+            for word in re.findall(r"[a-zA-Z0-9]+(?:\s+[a-zA-Z0-9]+)?", zone.lower()):
+                if len(word) > 2 and word not in ["and", "the", "floor"]:
+                    aliases[word] = m_name
+        floor = m.get("floor", "")
+        if floor:
+            aliases[floor.lower()] = m_name
+
+    _MACHINE_REGISTRY_CACHE = (names, aliases)
+    _CACHE_TIMESTAMP = now
+    return _MACHINE_REGISTRY_CACHE
 
 try:
     from typesafe_sdk import TypeSafeClient, Choice, Noul, NoulCriteria, Score
@@ -220,17 +264,18 @@ class JevSystemOneGuard:
 
         # 3. Direct write command tripwire
         if p_write >= 0.70 or (chosen_intent == "write_command" and severity >= 1.5):
+            machine_names, zone_aliases = get_machine_registry()
             target_machine = None
-            for m in MACHINE_NAMES:
+            for m in machine_names:
                 if m.lower() in prompt_lower:
                     target_machine = m
                     break
             if not target_machine:
-                for alias, m in ZONE_ALIASES.items():
+                for alias, m in zone_aliases.items():
                     if alias in prompt_lower:
                         target_machine = m
                         break
-            target_machine = target_machine or "AC-L2"
+            target_machine = target_machine or (machine_names[0] if machine_names else "AC-L2")
 
             action = "TURN OFF" if any(w in prompt_lower for w in ["off", "shut", "stop"]) else "TURN ON"
             if "set" in prompt_lower or "temp" in prompt_lower:
