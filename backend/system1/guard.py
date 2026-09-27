@@ -55,7 +55,8 @@ class JevSystemOneGuard:
 
     def __init__(self):
         self.api_key = TYPESAFE_API_KEY
-        self.base_url = TYPESAFE_BASE_URL
+        raw_url = TYPESAFE_BASE_URL or "https://api.typesafe.ai"
+        self.base_url = raw_url.rstrip("/").removesuffix("/v1")
 
     def analyze_query(self, user_prompt: str) -> Dict[str, Any]:
         """

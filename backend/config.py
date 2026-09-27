@@ -12,7 +12,8 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 
 # TypeSafe AI / Jev System One Configuration
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "")
-TYPESAFE_BASE_URL = os.getenv("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
+_raw_typesafe_url = os.getenv("TYPESAFE_BASE_URL", "https://api.typesafe.ai")
+TYPESAFE_BASE_URL = _raw_typesafe_url.rstrip("/").removesuffix("/v1")
 
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
