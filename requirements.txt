@@ -11,3 +11,4 @@ python-dotenv>=1.0.1
 tabulate>=0.9.0
 requests>=2.32.0
 typesafe-sdk>=0.7.0
+pydantic-ai>=2.50.0
