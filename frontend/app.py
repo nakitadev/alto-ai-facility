@@ -180,6 +180,17 @@ st.markdown("""
         color: var(--text-dim);
         margin-bottom: 0.75rem;
     }
+
+    /* Bottom spacing so fixed chat input never overlaps answers, tables, or expanders */
+    .main .block-container {
+        padding-bottom: 7.5rem !important;
+    }
+    [data-testid="stBottom"] {
+        background-color: var(--bg) !important;
+    }
+    [data-testid="stChatMessageContainer"] {
+        padding-bottom: 1.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -286,132 +297,140 @@ with tab_console:
             {"role": "assistant", "content": "Sawadee krup Somchai! I'm your facility AI assistant. I have live access to the 12 building machines across Days 1–7. What would you like to investigate?"}
         ]
 
-    # Render chat history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            if msg.get("tripwire"):
-                safe_guard = html.escape(str(msg["tripwire"]))
-                s1_lat = msg.get("system1_latency_ms") or msg.get("latency_ms", 0.0)
-                st.markdown(f'<div class="tripwire-badge">🛡️ System 1 Fast Tripwire: {safe_guard} ({s1_lat:.1f}ms)</div>', unsafe_allow_html=True)
-            elif msg.get("role") == "assistant" and (msg.get("tools") is not None or msg.get("provider")):
-                prov = html.escape(str(msg.get("provider", "Jev AI")))
-                tool_cnt = len(msg.get("tools", []))
-                s1_lat = msg.get("system1_latency_ms", 0.0)
-                lat = msg.get("latency_ms", 0.0)
-                s1_lat_str = f" · {s1_lat:.1f}ms" if s1_lat > 0 else ""
-                st.markdown(
-                    f'<div class="guard-badge">⚡ System 1 (TypeSafe): Passed ({prov}{s1_lat_str})</div> '
-                    f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({tool_cnt} tools · {lat:.1f}ms)</div>',
-                    unsafe_allow_html=True
-                )
-            if "tools" in msg and msg["tools"]:
-                with st.expander(f"🔍 Grounding Evidence ({len(msg['tools'])} tools inspected)", expanded=False):
-                    for tc in msg["tools"]:
-                        st.code(f"Tool: {tc.get('tool')}\nResult: {json.dumps(tc.get('result'), indent=2)}", language="json")
-            st.markdown(msg["content"])
+    if "last_sample" not in st.session_state:
+        st.session_state.last_sample = None
 
-    # Chat Input
+    # Dedicated container for all chat turns so that input widget always sits below the answer
+    chat_container = st.container()
+
+    # Chat Input widget rendered at the bottom
     user_input = st.chat_input("Ask a question about building energy, machines, AI actions, or policies...")
-    if selected_sample != "-- Select Query --":
+    if selected_sample != "-- Select Query --" and selected_sample != st.session_state.last_sample:
         user_input = selected_sample
+        st.session_state.last_sample = selected_sample
 
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing building telemetry & grounding facts..."):
-                badge_placeholder = st.empty()
-                message_placeholder = st.empty()
-                accumulated_text = ""
-                tripwire = None
-                tool_calls = []
-                latency = 0.0
-                provider = "Jev AI"
-
-                try:
-                    resp = requests.post(
-                        f"{BACKEND_URL}/api/chat/stream",
-                        json={"message": user_input, "conversation_id": "somchai_console_ui"},
-                        stream=True,
-                        timeout=90
+    with chat_container:
+        # Render chat history
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                if msg.get("tripwire"):
+                    safe_guard = html.escape(str(msg["tripwire"]))
+                    s1_lat = msg.get("system1_latency_ms") or msg.get("latency_ms", 0.0)
+                    st.markdown(f'<div class="tripwire-badge">🛡️ System 1 Fast Tripwire: {safe_guard} ({s1_lat:.1f}ms)</div>', unsafe_allow_html=True)
+                elif msg.get("role") == "assistant" and (msg.get("tools") is not None or msg.get("provider")):
+                    prov = html.escape(str(msg.get("provider", "Jev AI")))
+                    tool_cnt = len(msg.get("tools", []))
+                    s1_lat = msg.get("system1_latency_ms", 0.0)
+                    lat = msg.get("latency_ms", 0.0)
+                    s1_lat_str = f" · {s1_lat:.1f}ms" if s1_lat > 0 else ""
+                    st.markdown(
+                        f'<div class="guard-badge">⚡ System 1 (TypeSafe): Passed ({prov}{s1_lat_str})</div> '
+                        f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({tool_cnt} tools · {lat:.1f}ms)</div>',
+                        unsafe_allow_html=True
                     )
-                    if resp.status_code == 200:
-                        for line in resp.iter_lines():
-                            if not line:
-                                continue
-                            line_str = line.decode("utf-8") if isinstance(line, bytes) else line
-                            if line_str.startswith("data: "):
-                                payload_str = line_str[6:].strip()
-                                if payload_str == "[DONE]":
-                                    break
-                                try:
-                                    event = json.loads(payload_str)
-                                    etype = event.get("type")
-                                    if etype == "guard":
-                                        tripwire = event.get("tripwire")
-                                        guard_latency = event.get("latency_ms", 0.0)
-                                        provider = html.escape(str(event.get("provider", "Jev AI")))
-                                        if tripwire:
-                                            safe_tripwire = html.escape(str(tripwire))
-                                            badge_placeholder.markdown(f'<div class="tripwire-badge">🛡️ System 1 Fast Tripwire: {safe_tripwire} ({guard_latency:.1f}ms)</div>', unsafe_allow_html=True)
-                                        else:
+                if "tools" in msg and msg["tools"]:
+                    with st.expander(f"🔍 Grounding Evidence ({len(msg['tools'])} tools inspected)", expanded=False):
+                        for tc in msg["tools"]:
+                            st.code(f"Tool: {tc.get('tool')}\nResult: {json.dumps(tc.get('result'), indent=2)}", language="json")
+                st.markdown(msg["content"])
+
+        if user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing building telemetry & grounding facts..."):
+                    badge_placeholder = st.empty()
+                    message_placeholder = st.empty()
+                    accumulated_text = ""
+                    tripwire = None
+                    tool_calls = []
+                    latency = 0.0
+                    provider = "Jev AI"
+
+                    try:
+                        resp = requests.post(
+                            f"{BACKEND_URL}/api/chat/stream",
+                            json={"message": user_input, "conversation_id": "somchai_console_ui"},
+                            stream=True,
+                            timeout=90
+                        )
+                        if resp.status_code == 200:
+                            for line in resp.iter_lines():
+                                if not line:
+                                    continue
+                                line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+                                if line_str.startswith("data: "):
+                                    payload_str = line_str[6:].strip()
+                                    if payload_str == "[DONE]":
+                                        break
+                                    try:
+                                        event = json.loads(payload_str)
+                                        etype = event.get("type")
+                                        if etype == "guard":
+                                            tripwire = event.get("tripwire")
+                                            guard_latency = event.get("latency_ms", 0.0)
+                                            provider = html.escape(str(event.get("provider", "Jev AI")))
+                                            if tripwire:
+                                                safe_tripwire = html.escape(str(tripwire))
+                                                badge_placeholder.markdown(f'<div class="tripwire-badge">🛡️ System 1 Fast Tripwire: {safe_tripwire} ({guard_latency:.1f}ms)</div>', unsafe_allow_html=True)
+                                            else:
+                                                badge_placeholder.markdown(
+                                                    f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
+                                                    f'<div class="system2-badge">🧠 System 2: Deliberating & Querying Tools...</div>',
+                                                    unsafe_allow_html=True
+                                                )
+                                        elif etype == "tool_call":
+                                            tool_name = html.escape(str(event.get("tool", "tool")))
                                             badge_placeholder.markdown(
                                                 f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
-                                                f'<div class="system2-badge">🧠 System 2: Deliberating & Querying Tools...</div>',
+                                                f'<div class="system2-badge">🔧 Querying {tool_name}...</div>',
                                                 unsafe_allow_html=True
                                             )
-                                    elif etype == "tool_call":
-                                        tool_name = html.escape(str(event.get("tool", "tool")))
-                                        badge_placeholder.markdown(
-                                            f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
-                                            f'<div class="system2-badge">🔧 Querying {tool_name}...</div>',
-                                            unsafe_allow_html=True
-                                        )
-                                    elif etype == "token":
-                                        accumulated_text += event.get("content", "")
-                                        message_placeholder.markdown(accumulated_text + "▌")
-                                    elif etype == "done":
-                                        if "tool_calls" in event:
-                                            tool_calls = event["tool_calls"]
-                                        if "latency_ms" in event:
-                                            latency = event["latency_ms"]
-                                        s1_ms = event.get("system1_latency_ms", guard_latency)
-                                        if not tripwire:
-                                            badge_placeholder.markdown(
-                                                f'<div class="guard-badge">⚡ System 1 (TypeSafe): Passed ({provider} · {s1_ms:.1f}ms)</div> '
-                                                f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({len(tool_calls)} tools · {latency:.1f}ms)</div>',
-                                                unsafe_allow_html=True
-                                            )
-                                        if "response" in event and event["response"]:
-                                            accumulated_text = event["response"]
-                                except Exception:
-                                    pass
+                                        elif etype == "token":
+                                            accumulated_text += event.get("content", "")
+                                            message_placeholder.markdown(accumulated_text + "▌")
+                                        elif etype == "done":
+                                            if "tool_calls" in event:
+                                                tool_calls = event["tool_calls"]
+                                            if "latency_ms" in event:
+                                                latency = event["latency_ms"]
+                                            s1_ms = event.get("system1_latency_ms", guard_latency)
+                                            if not tripwire:
+                                                badge_placeholder.markdown(
+                                                    f'<div class="guard-badge">⚡ System 1 (TypeSafe): Passed ({provider} · {s1_ms:.1f}ms)</div> '
+                                                    f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({len(tool_calls)} tools · {latency:.1f}ms)</div>',
+                                                    unsafe_allow_html=True
+                                                )
+                                            if "response" in event and event["response"]:
+                                                accumulated_text = event["response"]
+                                    except Exception:
+                                        pass
 
-                        message_placeholder.markdown(accumulated_text)
+                            message_placeholder.markdown(accumulated_text)
 
-                        if tool_calls:
-                            with st.expander(f"🔍 Grounding Tool Inspections ({len(tool_calls)} calls)", expanded=True):
-                                for tc in tool_calls:
-                                    st.write(f"**Executed Tool**: `{tc.get('tool')}`")
-                                    if "arguments" in tc:
-                                        st.write(f"Arguments: `{json.dumps(tc.get('arguments'))}`")
-                                    st.json(tc.get("result", {}))
+                            if tool_calls:
+                                with st.expander(f"🔍 Grounding Tool Inspections ({len(tool_calls)} calls)", expanded=True):
+                                    for tc in tool_calls:
+                                        st.write(f"**Executed Tool**: `{tc.get('tool')}`")
+                                        if "arguments" in tc:
+                                            st.write(f"Arguments: `{json.dumps(tc.get('arguments'))}`")
+                                        st.json(tc.get("result", {}))
 
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": accumulated_text,
-                            "tools": tool_calls,
-                            "tripwire": tripwire,
-                            "provider": provider,
-                            "system1_latency_ms": guard_latency,
-                            "latency_ms": latency
-                        })
-                    else:
-                        st.error(f"Backend returned error {resp.status_code}: {resp.text}")
-                except Exception as e:
-                    st.error(f"Failed to connect to backend: {e}")
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": accumulated_text,
+                                "tools": tool_calls,
+                                "tripwire": tripwire,
+                                "provider": provider,
+                                "system1_latency_ms": guard_latency,
+                                "latency_ms": latency
+                            })
+                        else:
+                            st.error(f"Backend returned error {resp.status_code}: {resp.text}")
+                    except Exception as e:
+                        st.error(f"Failed to connect to backend: {e}")
 
 # ----------------- TAB 2: ENERGY & TELEMETRY ANALYTICS -----------------
 with tab_analytics:
