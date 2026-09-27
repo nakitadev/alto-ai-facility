@@ -24,6 +24,17 @@ def query_db(query: str, params: tuple = None, fetchone: bool = False, fetchall:
     finally:
         conn.close()
 
+import asyncio
+
+async def query_db_async(query: str, params: tuple = None, fetchone: bool = False, fetchall: bool = True):
+    """Non-blocking async execution of query_db on a worker thread for ASGI applications."""
+    return await asyncio.to_thread(query_db, query, params, fetchone, fetchall)
+
+async def execute_insert_async(query: str, params: tuple = None) -> int:
+    """Non-blocking async execution of execute_insert on a worker thread for ASGI applications."""
+    return await asyncio.to_thread(execute_insert, query, params)
+
+
 def execute_insert(query: str, params: tuple = None) -> int:
     conn = get_connection()
     try:
@@ -80,3 +91,12 @@ def get_registered_machines():
         return query_db("SELECT machine_name, machine_type, zone, floor, rated_power_kw, is_critical_24_7, description FROM machines ORDER BY machine_name;")
     except Exception:
         return []
+
+async def get_simulated_time_bounds_async():
+    """Non-blocking async time bounds lookup for ASGI endpoints."""
+    return await asyncio.to_thread(get_simulated_time_bounds)
+
+async def get_registered_machines_async():
+    """Non-blocking async machine registry lookup for ASGI endpoints."""
+    return await asyncio.to_thread(get_registered_machines)
+

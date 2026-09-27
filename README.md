@@ -73,8 +73,14 @@ make eval
    * Operates 100% locally with zero external vector database overhead.
 4. **Propose-Only Safety Invariant (Problem 3 Option A)**:
    * The assistant has strictly read-only credentials. When commanded to modify setpoints or turn off machines (Question 10), it logs a structured proposal to `pending_actions` requiring Somchai's physical click in the console to approve.
+5. **Native ASGI & Server-Sent Events (SSE) Streaming**:
+   * Built on an end-to-end asynchronous stack: Uvicorn ASGI server + FastAPI `async def` routes.
+   * `AsyncTypeSafeClient` delivers non-blocking System 1 micro-judgments (<90ms).
+   * PydanticAI `await agent.run()` and `agent.run_stream()` stream reasoning deltas token-by-token over `/api/chat/stream`.
+   * Non-blocking database calls (`asyncio.to_thread`) ensure high-throughput concurrency without blocking the ASGI event loop.
 
 ---
+
 
 ## Repository Structure
 

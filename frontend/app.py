@@ -195,27 +195,55 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Process via Backend
+    # Process via Backend (Native ASGI Server-Sent Events Streaming)
     with st.chat_message("assistant"):
         with st.spinner("Analyzing building telemetry & grounding facts..."):
+            badge_placeholder = st.empty()
+            message_placeholder = st.empty()
+            accumulated_text = ""
+            tripwire = None
+            tool_calls = []
+            latency = 0.0
+
             try:
                 resp = requests.post(
-                    f"{BACKEND_URL}/api/chat",
+                    f"{BACKEND_URL}/api/chat/stream",
                     json={"message": user_input, "conversation_id": "somchai_console_ui"},
+                    stream=True,
                     timeout=90
                 )
                 if resp.status_code == 200:
-                    data = resp.json()
-                    answer_text = data.get("response", "")
-                    tool_calls = data.get("tool_calls", [])
-                    tripwire = data.get("guard_tripwire")
-                    latency = data.get("latency_ms", 0)
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+                        if line_str.startswith("data: "):
+                            payload_str = line_str[6:].strip()
+                            if payload_str == "[DONE]":
+                                break
+                            try:
+                                event = json.loads(payload_str)
+                                etype = event.get("type")
+                                if etype == "guard":
+                                    tripwire = event.get("tripwire")
+                                    latency = event.get("latency_ms", 0.0)
+                                    provider = event.get("provider", "Jev AI")
+                                    if tripwire:
+                                        badge_placeholder.markdown(f'<div class="tripwire-badge">🛡️ System 1 Tripwire: {tripwire} ({latency:.1f}ms)</div>', unsafe_allow_html=True)
+                                    else:
+                                        badge_placeholder.markdown(f'<div class="guard-badge">⚡ System 1 Routed ({provider})</div>', unsafe_allow_html=True)
+                                elif etype == "token":
+                                    accumulated_text += event.get("content", "")
+                                    message_placeholder.markdown(accumulated_text + "▌")
+                                elif etype == "done":
+                                    if "tool_calls" in event:
+                                        tool_calls = event["tool_calls"]
+                                    if "latency_ms" in event and not latency:
+                                        latency = event["latency_ms"]
+                            except Exception:
+                                pass
 
-                    # Show System 1 Guard badge
-                    if tripwire:
-                        st.markdown(f'<div class="tripwire-badge">🛡️ System 1 Tripwire: {tripwire} ({latency:.1f}ms)</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="guard-badge">⚡ System 1 Routed · Latency: {latency:.1f}ms</div>', unsafe_allow_html=True)
+                    message_placeholder.markdown(accumulated_text)
 
                     # Show Tool Inspector (Transparency requirement)
                     if tool_calls:
@@ -226,24 +254,31 @@ if user_input:
                                     st.write(f"Arguments: `{json.dumps(tc.get('arguments'))}`")
                                 st.json(tc.get("result", {}))
 
-                    # Display streaming / rendered text
-                    message_placeholder = st.empty()
-                    # Simulate smooth streaming for UX
-                    displayed = ""
-                    for chunk in answer_text.split(" "):
-                        displayed += chunk + " "
-                        message_placeholder.markdown(displayed + "▌")
-                        time.sleep(0.015)
-                    message_placeholder.markdown(answer_text)
-
                     # Save to state
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": answer_text,
+                        "content": accumulated_text,
                         "tools": tool_calls,
                         "guard": tripwire
                     })
                 else:
-                    st.error(f"Backend returned error {resp.status_code}: {resp.text}")
+                    # Fallback to standard chat endpoint if streaming unavailable
+                    fallback_resp = requests.post(
+                        f"{BACKEND_URL}/api/chat",
+                        json={"message": user_input, "conversation_id": "somchai_console_ui"},
+                        timeout=90
+                    )
+                    if fallback_resp.status_code == 200:
+                        data = fallback_resp.json()
+                        message_placeholder.markdown(data.get("response", ""))
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": data.get("response", ""),
+                            "tools": data.get("tool_calls", []),
+                            "guard": data.get("guard_tripwire")
+                        })
+                    else:
+                        st.error(f"Backend returned error {resp.status_code}: {resp.text}")
             except Exception as e:
                 st.error(f"Failed to connect to backend: {e}")
+

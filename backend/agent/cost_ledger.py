@@ -94,3 +94,31 @@ def get_ledger_summary() -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e), "summary": {"total_calls": 0, "total_cost_usd": 0.0}}
+
+import asyncio
+
+async def record_llm_call_async(
+    conversation_id: str,
+    model_name: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: float,
+    intent_detected: str = "ANALYTICAL",
+    tools_called: List[str] = None
+) -> int:
+    """Non-blocking async cost ledger write for ASGI applications."""
+    return await asyncio.to_thread(
+        record_llm_call,
+        conversation_id,
+        model_name,
+        tokens_in,
+        tokens_out,
+        latency_ms,
+        intent_detected,
+        tools_called
+    )
+
+async def get_ledger_summary_async() -> Dict[str, Any]:
+    """Non-blocking async cost ledger summary query for ASGI endpoints."""
+    return await asyncio.to_thread(get_ledger_summary)
+

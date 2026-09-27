@@ -156,10 +156,12 @@ def evaluate_question(q_def: dict, ref: dict, result: dict) -> tuple[bool, str]:
 
     return False, "Evaluation criteria undefined."
 
-def run_evaluation(num_runs: int = 3):
+import asyncio
+
+async def run_evaluation_async(num_runs: int = 3, parallel: bool = False):
     print("=" * 70)
-    print("ALTO TECH AI ASSISTANT - REPEATABLE EVALUATION HARNESS")
-    print(f"Executing {num_runs} full iterations across all 10 Golden Questions")
+    print("ALTO TECH AI ASSISTANT - REPEATABLE EVALUATION HARNESS (ASGI / ASYNC)")
+    print(f"Executing {num_runs} full iterations across all 10 Golden Questions (Parallel={parallel})")
     print("=" * 70)
 
     # 1. Dynamically re-derive ground truth reference answers from TimescaleDB
@@ -179,27 +181,44 @@ def run_evaluation(num_runs: int = 3):
     # Store results per question across runs
     question_stats = {q["id"]: {"passes": 0, "runs": 0, "latencies": [], "tokens": [], "tools": set(), "reasons": []} for q in golden_questions}
 
+    async def run_single_question(q, run_idx):
+        qid = q["id"]
+        prompt = q["question"]
+        result = await run_agent_loop(user_prompt=prompt, conversation_id=f"eval_run_{run_idx}_q{qid}")
+        passed, reason = evaluate_question(q, ref_answers, result)
+        return qid, q, result, passed, reason
+
     for run_idx in range(1, num_runs + 1):
         print(f"\n--- Running Iteration {run_idx}/{num_runs} ---")
-        for q in golden_questions:
-            qid = q["id"]
-            prompt = q["question"]
-            
-            result = run_agent_loop(user_prompt=prompt, conversation_id=f"eval_run_{run_idx}_q{qid}")
-            passed, reason = evaluate_question(q, ref_answers, result)
-
-            stats = question_stats[qid]
-            stats["runs"] += 1
-            if passed:
-                stats["passes"] += 1
-            stats["latencies"].append(result["latency_ms"])
-            stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
-            for tc in result.get("tool_calls", []):
-                stats["tools"].add(tc.get("tool", "unknown"))
-            stats["reasons"].append(reason)
-            
-            status_str = "PASS" if passed else "FAIL"
-            print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
+        if parallel:
+            tasks = [run_single_question(q, run_idx) for q in golden_questions]
+            results = await asyncio.gather(*tasks)
+            for qid, q, result, passed, reason in results:
+                stats = question_stats[qid]
+                stats["runs"] += 1
+                if passed:
+                    stats["passes"] += 1
+                stats["latencies"].append(result["latency_ms"])
+                stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
+                for tc in result.get("tool_calls", []):
+                    stats["tools"].add(tc.get("tool", "unknown"))
+                stats["reasons"].append(reason)
+                status_str = "PASS" if passed else "FAIL"
+                print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
+        else:
+            for q in golden_questions:
+                qid, _, result, passed, reason = await run_single_question(q, run_idx)
+                stats = question_stats[qid]
+                stats["runs"] += 1
+                if passed:
+                    stats["passes"] += 1
+                stats["latencies"].append(result["latency_ms"])
+                stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
+                for tc in result.get("tool_calls", []):
+                    stats["tools"].add(tc.get("tool", "unknown"))
+                stats["reasons"].append(reason)
+                status_str = "PASS" if passed else "FAIL"
+                print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
 
     # Build Summary Table
     table_data = []
@@ -242,7 +261,7 @@ def run_evaluation(num_runs: int = 3):
     # Save to eval_report.md
     markdown_report = f"""# Golden Set Evaluation Report
 
-**Generated**: {num_runs} automated evaluation iterations  
+**Generated**: {num_runs} automated evaluation iterations (ASGI Native Async)  
 **Overall Golden Set Pass Rate**: **{overall_pass_rate:.1f}%** ({total_passed}/{total_runs} tests passed)  
 **Tolerances Enforced**:
 * Electrical Energy & Percentages: **±1.0%** relative tolerance
@@ -274,8 +293,13 @@ def run_evaluation(num_runs: int = 3):
     REPORT_OUTPUT_PATH.write_text(markdown_report, encoding="utf-8")
     print(f"\nReport written to {REPORT_OUTPUT_PATH}")
 
+def run_evaluation(num_runs: int = 3, parallel: bool = False):
+    asyncio.run(run_evaluation_async(num_runs=num_runs, parallel=parallel))
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run AltoTech AI Evaluation Harness")
     parser.add_argument("--runs", type=int, default=3, help="Number of full iterations (default: 3)")
+    parser.add_argument("--parallel", action="store_true", help="Execute questions concurrently in async gather mode")
     args = parser.parse_args()
-    run_evaluation(num_runs=args.runs)
+    run_evaluation(num_runs=args.runs, parallel=args.parallel)
+

@@ -138,9 +138,16 @@ class HybridDocumentRetriever:
                 continue
 
             # Prompt injection defense check:
-            # Check for subversive phrases like "ignore previous instructions"
-            sanitized_content = chunk.content
-            has_injection = bool(re.search(r"ignore\s+previous\s+instructions", sanitized_content, re.IGNORECASE))
+            # Neutralize subversive phrases like "ignore previous instructions"
+            has_injection = bool(re.search(r"ignore\s+(?:all\s+)?previous\s+instructions", chunk.content, re.IGNORECASE))
+            if has_injection:
+                sanitized_content = re.sub(
+                    r"(?i)ignore\s+(?:all\s+)?previous\s+instructions[^\.\n]*[\.\n]?",
+                    "[SECURITY NOTICE: Untrusted prompt injection neutralized by RAG sanitizer. Ground strictly in TimescaleDB telemetry.]\n",
+                    chunk.content
+                )
+            else:
+                sanitized_content = chunk.content
 
             results.append({
                 "source_doc": chunk.doc_name,
@@ -149,6 +156,7 @@ class HybridDocumentRetriever:
                 "injection_detected": has_injection,
                 "score": round(float(rrf_scores[idx]), 4)
             })
+
 
             if len(results) >= top_k:
                 break

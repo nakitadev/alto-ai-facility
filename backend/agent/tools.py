@@ -2,7 +2,7 @@ import datetime
 import re
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
-from backend.database import query_db, execute_insert
+from backend.database import query_db, execute_insert, query_db_async, execute_insert_async
 from backend.rag.retriever import retriever
 from backend.config import DEFAULT_TIMEZONE
 
@@ -70,8 +70,8 @@ def parse_bangkok_time(time_str: str) -> datetime.datetime:
         bkk_dt = datetime.datetime(date_parts[0], date_parts[1], date_parts[2], hour, minute, second, tzinfo=BANGKOK_TZ)
         return bkk_dt.astimezone(UTC_TZ)
 
-# Tool 1: Energy Aggregates
-def query_energy_aggregates(start_time: str, end_time: str, machine_name: Optional[str] = None, group_by: str = "total") -> Dict[str, Any]:
+# Tool 1: Energy Aggregates (Async)
+async def query_energy_aggregates(start_time: str, end_time: str, machine_name: Optional[str] = None, group_by: str = "total") -> Dict[str, Any]:
     """
     Calculates deterministic electrical energy in kWh = SUM(power_kw * 5/60).
     Aggregates by total, by day, or by machine in Bangkok time.
@@ -99,7 +99,7 @@ def query_energy_aggregates(start_time: str, end_time: str, machine_name: Option
             ORDER BY total_kwh DESC
             LIMIT 50;
         """
-        rows = query_db(sql, tuple(params))
+        rows = await query_db_async(sql, tuple(params))
         top_machine = rows[0]["machine_name"] if rows else None
         top_kwh = float(rows[0]["total_kwh"]) if rows else 0.0
         return {
@@ -121,7 +121,7 @@ def query_energy_aggregates(start_time: str, end_time: str, machine_name: Option
             ORDER BY bangkok_date ASC
             LIMIT 30;
         """
-        rows = query_db(sql, tuple(params))
+        rows = await query_db_async(sql, tuple(params))
         base_date = get_base_date()
         return {
             "period": f"{start_time} to {end_time}",
@@ -143,7 +143,7 @@ def query_energy_aggregates(start_time: str, end_time: str, machine_name: Option
             FROM sensor_readings
             WHERE time >= %s AND time <= %s {machine_clause};
         """
-        row = query_db(sql, tuple(params), fetchone=True)
+        row = await query_db_async(sql, tuple(params), fetchone=True)
         return {
             "start_time_bkk": start_time,
             "end_time_bkk": end_time,
@@ -153,8 +153,8 @@ def query_energy_aggregates(start_time: str, end_time: str, machine_name: Option
             "samples_analyzed": int(row["total_samples"]) if row else 0
         }
 
-# Tool 2: Sensor Readings Statistics
-def query_sensor_readings(machine_name: str, start_time: str, end_time: str, metric: str = "temperature", aggregate: str = "avg") -> Dict[str, Any]:
+# Tool 2: Sensor Readings Statistics (Async)
+async def query_sensor_readings(machine_name: str, start_time: str, end_time: str, metric: str = "temperature", aggregate: str = "avg") -> Dict[str, Any]:
     """
     Queries sensor readings (temperature, power, setpoint, speed) for a machine.
     Returns statistical aggregates to keep token budget bounded.
@@ -176,7 +176,7 @@ def query_sensor_readings(machine_name: str, start_time: str, end_time: str, met
         WHERE machine_name = %s AND time >= %s AND time <= %s
         GROUP BY machine_name;
     """
-    row = query_db(sql, (machine_name, start_utc, end_utc), fetchone=True)
+    row = await query_db_async(sql, (machine_name, start_utc, end_utc), fetchone=True)
     if not row or row["reading_count"] == 0:
         return {
             "machine_name": machine_name,
@@ -194,8 +194,8 @@ def query_sensor_readings(machine_name: str, start_time: str, end_time: str, met
         "reading_count": int(row["reading_count"])
     }
 
-# Tool 3: AI Decisions Log
-def query_ai_decisions(start_time: str, end_time: str, machine_name: Optional[str] = None, action: str = "ANY", limit: int = 20) -> Dict[str, Any]:
+# Tool 3: AI Decisions Log (Async)
+async def query_ai_decisions(start_time: str, end_time: str, machine_name: Optional[str] = None, action: str = "ANY", limit: int = 20) -> Dict[str, Any]:
     """
     Queries logged actions taken by the building AI in Days 4–7.
     """
@@ -227,7 +227,7 @@ def query_ai_decisions(start_time: str, end_time: str, machine_name: Optional[st
         ORDER BY timestamp ASC
         LIMIT %s;
     """
-    rows = query_db(sql, tuple(params))
+    rows = await query_db_async(sql, tuple(params))
     
     decisions = []
     for r in rows:
@@ -245,8 +245,8 @@ def query_ai_decisions(start_time: str, end_time: str, machine_name: Optional[st
         "decisions": decisions
     }
 
-# Tool 4: Search Documents
-def search_docs(query: str, document_filter: str = "all") -> Dict[str, Any]:
+# Tool 4: Search Documents (Async)
+async def search_docs(query: str, document_filter: str = "all") -> Dict[str, Any]:
     """
     Retrieves policy rules, schedules, comfort bands, and maintenance notes from docs/.
     """
@@ -257,12 +257,12 @@ def search_docs(query: str, document_filter: str = "all") -> Dict[str, Any]:
         "chunks": chunks
     }
 
-# Tool 5: Propose Action (Problem 3 Option A)
-def propose_control_action(machine_name: str, proposed_action: str, reasoning: str, parameter_value: str = "N/A") -> Dict[str, Any]:
+# Tool 5: Propose Action (Problem 3 Option A - Async)
+async def propose_control_action(machine_name: str, proposed_action: str, reasoning: str, parameter_value: str = "N/A") -> Dict[str, Any]:
     """
     Creates an unexecuted proposal in pending_actions requiring operator confirmation.
     """
-    proposal_id = execute_insert(
+    proposal_id = await execute_insert_async(
         """
         INSERT INTO pending_actions (machine_name, proposed_action, parameter_value, reasoning, status)
         VALUES (%s, %s, %s, %s, 'PENDING')
@@ -278,6 +278,7 @@ def propose_control_action(machine_name: str, proposed_action: str, reasoning: s
         "status": "PENDING_CONFIRMATION",
         "message": f"Proposal #{proposal_id} logged. Awaiting Somchai's authorization."
     }
+
 
 # Tool Registry for OpenAI / OpenRouter function calling
 TOOL_DEFINITIONS = [

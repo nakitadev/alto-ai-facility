@@ -1,23 +1,36 @@
 import datetime
 from typing import Optional, Dict, Any
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.config import BACKEND_HOST, BACKEND_PORT
 from backend.database import (
     get_simulated_time_bounds,
+    get_simulated_time_bounds_async,
     get_registered_machines,
-    query_db,
-    execute_insert
+    get_registered_machines_async,
+    query_db_async,
+    execute_insert_async
 )
-from backend.agent.loop import run_agent_loop
-from backend.agent.cost_ledger import get_ledger_summary
+from backend.agent.loop import run_agent_loop, stream_agent_loop
+from backend.agent.cost_ledger import get_ledger_summary_async
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ASGI Lifespan Startup: Non-blocking health check
+    time_bounds = await get_simulated_time_bounds_async()
+    print(f"[ASGI Server Ready] TimescaleDB connected. Data range: Day 1 - Day {time_bounds.get('days_available', 7)}")
+    yield
+    print("[ASGI Server Shutdown] Graceful termination complete.")
 
 app = FastAPI(
     title="Somchai Commercial HVAC Energy Assistant API",
-    description="Backend API powering grounded AI reasoning, tool calls, and safety controls over TimescaleDB.",
-    version="1.0.0"
+    description="Backend ASGI API powering grounded AI reasoning, tool calls, and safety controls over TimescaleDB.",
+    version="1.1.0",
+    lifespan=lifespan
 )
 
 # Enable CORS for local Streamlit / Frontend interaction
@@ -38,39 +51,68 @@ class ApprovalRequest(BaseModel):
     notes: Optional[str] = "Authorized via Facility Operations Console."
 
 @app.get("/api/health")
-def health_check():
-    time_bounds = get_simulated_time_bounds()
+async def health_check():
+    """ASGI Non-blocking health check verifying TimescaleDB connectivity."""
+    time_bounds = await get_simulated_time_bounds_async()
     return {
         "status": "healthy",
-        "service": "AltoTech Energy Assistant",
+        "service": "AltoTech Energy Assistant (ASGI)",
         "database": time_bounds
     }
 
 @app.get("/api/machines")
-def list_machines():
-    return {"machines": get_registered_machines()}
+async def list_machines():
+    """Returns registered building equipment asynchronously."""
+    machines = await get_registered_machines_async()
+    return {"machines": machines}
 
 @app.get("/api/time_bounds")
-def time_bounds():
-    return get_simulated_time_bounds()
+async def time_bounds():
+    """Returns active dataset temporal bounds asynchronously."""
+    return await get_simulated_time_bounds_async()
 
 @app.post("/api/chat")
-def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest):
+    """
+    Standard ASGI endpoint executing Dual-Process System 1 + System 2 agent loop.
+    """
     if not request.message or not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
     
-    result = run_agent_loop(
+    result = await run_agent_loop(
         user_prompt=request.message,
         conversation_id=request.conversation_id
     )
     return result
 
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest):
+    """
+    Native ASGI Server-Sent Events (SSE) streaming endpoint.
+    Emits token deltas in real-time as the LLM generates reasoning and tool calls.
+    """
+    if not request.message or not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    
+    return StreamingResponse(
+        stream_agent_loop(
+            user_prompt=request.message,
+            conversation_id=request.conversation_id
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
 @app.get("/api/pending_actions")
-def list_pending_actions():
+async def list_pending_actions():
     """
     Returns pending machine control proposals awaiting operator authorization (Problem 3 Option A).
     """
-    actions = query_db("""
+    actions = await query_db_async("""
         SELECT id, proposed_at, machine_name, proposed_action, parameter_value, reasoning, status, reviewed_by, reviewed_at
         FROM pending_actions
         ORDER BY proposed_at DESC
@@ -79,15 +121,15 @@ def list_pending_actions():
     return {"pending_actions": [dict(a) for a in actions]}
 
 @app.post("/api/pending_actions/{action_id}/approve")
-def approve_action(action_id: int, req: ApprovalRequest):
+async def approve_action(action_id: int, req: ApprovalRequest):
     """
-    Approves a proposed action. Writes audit signature to database.
+    Approves a proposed action asynchronously. Writes audit signature to database.
     """
-    action = query_db("SELECT id, status FROM pending_actions WHERE id = %s", (action_id,), fetchone=True)
+    action = await query_db_async("SELECT id, status FROM pending_actions WHERE id = %s", (action_id,), fetchone=True)
     if not action:
         raise HTTPException(status_code=404, detail="Proposal not found.")
     
-    execute_insert(
+    await execute_insert_async(
         """
         UPDATE pending_actions 
         SET status = 'APPROVED', reviewed_by = %s, reviewed_at = NOW(), execution_notes = %s
@@ -98,15 +140,15 @@ def approve_action(action_id: int, req: ApprovalRequest):
     return {"status": "SUCCESS", "message": f"Proposal #{action_id} approved by {req.reviewer_name}."}
 
 @app.post("/api/pending_actions/{action_id}/reject")
-def reject_action(action_id: int, req: ApprovalRequest):
+async def reject_action(action_id: int, req: ApprovalRequest):
     """
-    Rejects a proposed action.
+    Rejects a proposed action asynchronously.
     """
-    action = query_db("SELECT id, status FROM pending_actions WHERE id = %s", (action_id,), fetchone=True)
+    action = await query_db_async("SELECT id, status FROM pending_actions WHERE id = %s", (action_id,), fetchone=True)
     if not action:
         raise HTTPException(status_code=404, detail="Proposal not found.")
     
-    execute_insert(
+    await execute_insert_async(
         """
         UPDATE pending_actions 
         SET status = 'REJECTED', reviewed_by = %s, reviewed_at = NOW(), execution_notes = %s
@@ -117,12 +159,13 @@ def reject_action(action_id: int, req: ApprovalRequest):
     return {"status": "SUCCESS", "message": f"Proposal #{action_id} rejected by {req.reviewer_name}."}
 
 @app.get("/api/ledger")
-def get_ledger():
+async def get_ledger():
     """
-    Returns comprehensive usage and cost analytics for Somchai's boss.
+    Returns comprehensive usage and cost analytics for Somchai's boss asynchronously.
     """
-    return get_ledger_summary()
+    return await get_ledger_summary_async()
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host=BACKEND_HOST, port=BACKEND_PORT, reload=True)
+

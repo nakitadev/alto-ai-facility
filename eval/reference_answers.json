@@ -38,15 +38,9 @@
       },
       {
         "time": "2026-09-07 06:00:00",
-        "machine": "AC-L1",
+        "machine": "FAN-03",
         "action": "TURN ON",
-        "reason": "Building opening, pre-cool zones A and B"
-      },
-      {
-        "time": "2026-09-07 06:00:00",
-        "machine": "AC-L2",
-        "action": "TURN ON",
-        "reason": "Building opening, pre-cool zones A and B"
+        "reason": "Morning startup ventilation for Floors 1\u20133"
       },
       {
         "time": "2026-09-07 06:00:00",
@@ -56,9 +50,15 @@
       },
       {
         "time": "2026-09-07 06:00:00",
-        "machine": "FAN-03",
+        "machine": "AC-L1",
         "action": "TURN ON",
-        "reason": "Morning startup ventilation for Floors 1\u20133"
+        "reason": "Building opening, pre-cool zones A and B"
+      },
+      {
+        "time": "2026-09-07 06:00:00",
+        "machine": "AC-L2",
+        "action": "TURN ON",
+        "reason": "Building opening, pre-cool zones A and B"
       }
     ]
   },

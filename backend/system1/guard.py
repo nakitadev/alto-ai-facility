@@ -80,8 +80,14 @@ def get_machine_registry() -> tuple[list[str], dict[str, str]]:
     _CACHE_TIMESTAMP = now
     return _MACHINE_REGISTRY_CACHE
 
+async def get_machine_registry_async() -> tuple[list[str], dict[str, str]]:
+    """Non-blocking async machine registry discovery for ASGI loops."""
+    import asyncio
+    return await asyncio.to_thread(get_machine_registry)
+
+
 try:
-    from typesafe_sdk import TypeSafeClient, Choice, Noul, NoulCriteria, Score
+    from typesafe_sdk import AsyncTypeSafeClient, TypeSafeClient, Choice, Noul, NoulCriteria, Score
     TYPESAFE_AVAILABLE = True
 except ImportError:
     TYPESAFE_AVAILABLE = False
@@ -95,14 +101,15 @@ class JevSystemOneGuard:
       - Score: Severity and operational risk assessment
       - Choice: Categorical intent classification with calibrated confidence
     Executes in <90ms to shield the deliberative System 2 LLM.
+    Supports native ASGI async execution with sub-second non-blocking I/O.
     """
 
     def __init__(self):
         self.api_key = TYPESAFE_API_KEY
 
-    def analyze_query(self, user_prompt: str) -> Dict[str, Any]:
+    async def analyze_query(self, user_prompt: str) -> Dict[str, Any]:
         """
-        Runs Jev System One evaluation over user input.
+        Runs Jev System One evaluation over user input asynchronously.
         """
         prompt_lower = user_prompt.lower()
         
@@ -110,16 +117,30 @@ class JevSystemOneGuard:
         has_real_key = bool(self.api_key and not self.api_key.startswith("your_"))
         if TYPESAFE_AVAILABLE and has_real_key:
             try:
-                return self._call_live_jev(user_prompt)
+                return await self._call_live_jev(user_prompt)
             except Exception as e:
                 print(f"Warning: Jev API call failed ({e}). Falling back to calibrated local Jev evaluator.")
 
         # 2. Calibrated Local Jev Decision Engine
         return self._call_calibrated_jev(user_prompt)
 
-    def _call_live_jev(self, user_prompt: str) -> Dict[str, Any]:
-        with TypeSafeClient(api_key=self.api_key) as client:
-            resp = client.system_one(
+    def analyze_query_sync(self, user_prompt: str) -> Dict[str, Any]:
+        """Synchronous wrapper for legacy non-async environments."""
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    return executor.submit(lambda: asyncio.run(self.analyze_query(user_prompt))).result()
+            else:
+                return loop.run_until_complete(self.analyze_query(user_prompt))
+        except Exception:
+            return self._call_calibrated_jev(user_prompt)
+
+    async def _call_live_jev(self, user_prompt: str) -> Dict[str, Any]:
+        async with AsyncTypeSafeClient(api_key=self.api_key) as client:
+            resp = await client.system_one(
                 state={"user_prompt": user_prompt},
                 questions={
                     "is_write_action": Noul(
@@ -182,6 +203,7 @@ class JevSystemOneGuard:
                 confidence_score=intent_confidence,
                 severity=severity
             )
+
 
     def _call_calibrated_jev(self, user_prompt: str) -> Dict[str, Any]:
         prompt_lower = user_prompt.lower()
