@@ -12,7 +12,11 @@ import json
 import re
 import argparse
 from pathlib import Path
-from tabulate import tabulate
+def format_table(headers, rows):
+    header_line = "| " + " | ".join(headers) + " |"
+    sep_line = "| " + " | ".join(["---"] * len(headers)) + " |"
+    row_lines = ["| " + " | ".join(str(cell) for cell in row) + " |" for row in rows]
+    return "\n".join([header_line, sep_line] + row_lines)
 
 # Ensure root dir is in path
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -226,7 +230,7 @@ def run_evaluation(num_runs: int = 3):
         ])
 
     headers = ["ID", "Question", "Category", "Pass Rate", "Avg Latency", "Avg Tokens", "Tools Called", "Reason / Audit Note"]
-    report_table = tabulate(table_data, headers=headers, tablefmt="github")
+    report_table = format_table(headers, table_data)
 
     overall_pass_rate = (total_passed / total_runs) * 100.0
     print("\n" + "=" * 70)
