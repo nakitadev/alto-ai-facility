@@ -19,7 +19,8 @@ try:
 except Exception:
     pass
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, PartDeltaEvent, FunctionToolCallEvent, FunctionToolResultEvent, AgentRunResultEvent
+from pydantic_ai.messages import TextPartDelta
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.openai import OpenAIChatModel
 
@@ -204,16 +205,34 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
     model = OpenAIChatModel(OPENROUTER_MODEL, provider=provider)
     agent = Agent(model, system_prompt=prompt, tools=BUILDING_TOOLS)
 
-    async with agent.run_stream(user_prompt) as stream:
-        async for delta in stream.stream_text(delta=True):
-            yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+    final_result = None
+    accumulated_output = ""
 
-        final_out = await stream.get_output()
-        latency_ms = (time.time() - start_time) * 1000.0
+    async with agent.run_stream_events(user_prompt) as events:
+        async for event in events:
+            if isinstance(event, PartDeltaEvent):
+                if isinstance(event.delta, TextPartDelta):
+                    delta_text = event.delta.content_delta
+                    if delta_text:
+                        accumulated_output += delta_text
+                        yield f"data: {json.dumps({'type': 'token', 'content': delta_text})}\n\n"
+            elif isinstance(event, FunctionToolCallEvent):
+                tool_name = getattr(event.part, "tool_name", "tool")
+                tool_args = getattr(event.part, "args", {})
+                yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name, 'args': tool_args}, default=str)}\n\n"
+            elif isinstance(event, FunctionToolResultEvent):
+                yield f"data: {json.dumps({'type': 'tool_result'})}\n\n"
+            elif isinstance(event, AgentRunResultEvent):
+                final_result = event.result
 
-        executed_tools = []
-        tools_called = []
-        for msg in stream.all_messages():
+    latency_ms = (time.time() - start_time) * 1000.0
+
+    executed_tools = []
+    tools_called = []
+    final_response = str(final_result.output) if final_result and hasattr(final_result, "output") else accumulated_output
+
+    if final_result:
+        for msg in final_result.all_messages():
             for p in getattr(msg, "parts", []):
                 if type(p).__name__ == "ToolCallPart":
                     tools_called.append(p.tool_name)
@@ -221,21 +240,24 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
                 elif type(p).__name__ == "ToolReturnPart" and executed_tools:
                     executed_tools[-1]["result"] = getattr(p, "content", {})
 
-        in_tokens = getattr(stream.usage, "input_tokens", 0)
-        out_tokens = getattr(stream.usage, "output_tokens", 0)
+        in_tokens = getattr(final_result.usage, "input_tokens", 0)
+        out_tokens = getattr(final_result.usage, "output_tokens", 0)
+    else:
+        in_tokens = 0
+        out_tokens = len(accumulated_output.split())
 
-        await record_llm_call_async(
-            conversation_id=conversation_id,
-            model_name=f"PydanticAI-{OPENROUTER_MODEL}",
-            tokens_in=in_tokens,
-            tokens_out=out_tokens,
-            latency_ms=latency_ms,
-            intent_detected=guard.get("intent", "ANALYTICAL"),
-            tools_called=tools_called
-        )
+    await record_llm_call_async(
+        conversation_id=conversation_id,
+        model_name=f"PydanticAI-{OPENROUTER_MODEL}",
+        tokens_in=in_tokens,
+        tokens_out=out_tokens,
+        latency_ms=latency_ms,
+        intent_detected=guard.get("intent", "ANALYTICAL"),
+        tools_called=tools_called
+    )
 
-        yield f"data: {json.dumps({'type': 'done', 'response': str(final_out), 'tool_calls': executed_tools, 'tokens_in': in_tokens, 'tokens_out': out_tokens, 'system1_latency_ms': round(guard_ms, 2), 'latency_ms': round(latency_ms, 2)}, default=str)}\n\n"
-        yield "data: [DONE]\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'response': final_response, 'tool_calls': executed_tools, 'tokens_in': in_tokens, 'tokens_out': out_tokens, 'system1_latency_ms': round(guard_ms, 2), 'latency_ms': round(latency_ms, 2)}, default=str)}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 def run_agent_loop_sync(user_prompt: str, conversation_id: str = "default_conv") -> Dict[str, Any]:

@@ -362,6 +362,13 @@ with tab_console:
                                                 f'<div class="system2-badge">🧠 System 2: Deliberating & Querying Tools...</div>',
                                                 unsafe_allow_html=True
                                             )
+                                    elif etype == "tool_call":
+                                        tool_name = html.escape(str(event.get("tool", "tool")))
+                                        badge_placeholder.markdown(
+                                            f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
+                                            f'<div class="system2-badge">🔧 Querying {tool_name}...</div>',
+                                            unsafe_allow_html=True
+                                        )
                                     elif etype == "token":
                                         accumulated_text += event.get("content", "")
                                         message_placeholder.markdown(accumulated_text + "▌")
@@ -377,6 +384,8 @@ with tab_console:
                                                 f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({len(tool_calls)} tools · {latency:.1f}ms)</div>',
                                                 unsafe_allow_html=True
                                             )
+                                        if "response" in event and event["response"]:
+                                            accumulated_text = event["response"]
                                 except Exception:
                                     pass
 
