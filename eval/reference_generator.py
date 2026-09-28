@@ -139,9 +139,11 @@ def generate_reference_answers() -> dict:
     }
 
     # Q8: This month vs last month
+    from backend.database import get_simulated_time_bounds
+    bounds = get_simulated_time_bounds()
     references["q8"] = {
         "is_out_of_range": True,
-        "available_days": 7
+        "available_days": bounds.get("days_available", 7)
     }
 
     # Q9: Machines running at 3 AM on Day 3

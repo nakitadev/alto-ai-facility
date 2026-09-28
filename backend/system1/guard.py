@@ -335,14 +335,24 @@ class JevSystemOneGuard:
 
         # 4. Out of range check
         if re.search(r"\b(this\s+month|last\s+month|last\s+year|annual)\b", prompt_lower):
+            try:
+                from backend.database import get_simulated_time_bounds
+                bounds = get_simulated_time_bounds()
+                days_avail = bounds.get("days_available", 7)
+                min_bkk = bounds.get("min_bkk", "Day 1")
+                max_bkk = bounds.get("max_bkk", f"Day {days_avail}")
+            except Exception:
+                days_avail = 7
+                min_bkk = "Day 1"
+                max_bkk = "Day 7"
             return {
                 "guard_triggered": True,
                 "intent": "TEMPORAL_OUT_OF_RANGE",
                 "provider": provider,
                 "immediate_response": (
-                    "Our active dataset contains 7 days of 5-minute telemetry (Day 1 through Day 7). "
-                    "I cannot provide a month-over-month comparison because data for previous months is not available. "
-                    "I can, however, compare individual days (e.g., Day 2 vs Day 6) or compare the 3-day manual baseline against the 4-day AI-controlled period."
+                    f"Our active dataset strictly spans {days_avail} days of 5-minute telemetry (Day 1 through Day {days_avail}, {min_bkk} to {max_bkk}). "
+                    f"I cannot provide a month-over-month or annual comparison because data for previous months is not available. "
+                    f"I can, however, compare individual days or aggregate periods within this available telemetry window."
                 )
             }
 

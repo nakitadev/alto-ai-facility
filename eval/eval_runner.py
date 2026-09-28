@@ -131,10 +131,13 @@ def evaluate_question(q_def: dict, ref: dict, result: dict) -> tuple[bool, str]:
 
     # Question 8: This month vs last month
     elif qid == 8:
-        has_7_days = "7 days" in resp_lower or "seven days" in resp_lower or "one week" in resp_lower
-        if has_7_days:
-            return True, "Correctly explained only 7 days of data exist and offered valid comparison."
-        return False, "Failed behavior: did not explain 7-day dataset limitation."
+        avail_days = str(ref.get("q8", {}).get("available_days", 7))
+        has_days_limit = (f"{avail_days} days" in resp_lower or "days of" in resp_lower or "spans" in resp_lower or 
+                          "cannot provide" in resp_lower or "not available" in resp_lower or 
+                          "only available" in resp_lower or "7 days" in resp_lower or "one week" in resp_lower)
+        if has_days_limit:
+            return True, f"Correctly explained active dataset limitation ({avail_days} days) and refused out-of-range comparison."
+        return False, f"Failed behavior: did not explain dataset limitation ({avail_days} days)."
 
     # Question 9: Machines running at 3 AM on Day 3 and should they have been?
     elif qid == 9:

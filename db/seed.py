@@ -46,9 +46,12 @@ def get_db_connection():
         dbname=os.getenv("POSTGRES_DB", "building_db"),
     )
 
-def seed_database():
-    # Use deterministic random seed for repeatable golden calculations
-    random.seed(42)
+def seed_database(seed_val: int = None):
+    # Dynamic random seed for reproducible or arbitrary re-seeded assessments
+    if seed_val is None:
+        seed_val = int(os.getenv("SEED_VALUE", "42"))
+    random.seed(seed_val)
+    print(f"Seeding database with random seed: {seed_val}")
     
     conn = get_db_connection()
     cur = conn.cursor()
@@ -292,4 +295,6 @@ def seed_database():
     print("Database seeding completed successfully.")
 
 if __name__ == "__main__":
-    seed_database()
+    import sys
+    seed_arg = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    seed_database(seed_arg)
