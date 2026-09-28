@@ -18,14 +18,13 @@ logfire.configure(
 )
 
 from backend.database import (
-    get_simulated_time_bounds,
+    get_async_session,
     get_simulated_time_bounds_async,
-    get_registered_machines,
-    get_registered_machines_async,
-    query_db_async,
-    execute_insert_async
+    get_registered_machines_async
 )
-from backend.agent.loop import run_agent_loop, stream_agent_loop
+from backend.models import PendingAction
+from sqlalchemy import select, update, func
+from backend.agent.loop import run_agent_loop, stream_agent_loop, clear_session_history
 from backend.agent.cost_ledger import get_ledger_summary_async
 
 @asynccontextmanager
@@ -60,6 +59,9 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "somchai_control_session"
+
+class ResetChatRequest(BaseModel):
+    conversation_id: str
 
 class ApprovalRequest(BaseModel):
     reviewer_name: str = "Somchai Thanakit"
@@ -122,55 +124,71 @@ async def chat_stream_endpoint(request: ChatRequest):
         }
     )
 
+@app.post("/api/chat/reset")
+async def reset_chat_endpoint(request: ResetChatRequest):
+    """
+    Clears the in-memory multi-turn message history for a given conversation_id.
+    """
+    clear_session_history(request.conversation_id)
+    return {"status": "cleared", "conversation_id": request.conversation_id}
+
 @app.get("/api/pending_actions")
 async def list_pending_actions():
     """
-    Returns pending machine control proposals awaiting operator authorization (Problem 3 Option A).
+    Returns pending machine control proposals awaiting operator authorization (Problem 3 Option A) using SQLAlchemy.
     """
-    actions = await query_db_async("""
-        SELECT id, proposed_at, machine_name, proposed_action, parameter_value, reasoning, status, reviewed_by, reviewed_at
-        FROM pending_actions
-        ORDER BY proposed_at DESC
-        LIMIT 50;
-    """)
-    return {"pending_actions": [dict(a) for a in actions]}
+    stmt = select(PendingAction).order_by(PendingAction.proposed_at.desc()).limit(50)
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        actions = [a.to_dict() for a in result.scalars().all()]
+        return {"pending_actions": actions}
 
 @app.post("/api/pending_actions/{action_id}/approve")
 async def approve_action(action_id: int, req: ApprovalRequest):
     """
-    Approves a proposed action asynchronously. Writes audit signature to database.
+    Approves a proposed action asynchronously using SQLAlchemy. Writes audit signature to database.
     """
-    action = await query_db_async("SELECT id, status FROM pending_actions WHERE id = %s", (action_id,), fetchone=True)
-    if not action:
-        raise HTTPException(status_code=404, detail="Proposal not found.")
-    
-    await execute_insert_async(
-        """
-        UPDATE pending_actions 
-        SET status = 'APPROVED', reviewed_by = %s, reviewed_at = NOW(), execution_notes = %s
-        WHERE id = %s;
-        """,
-        (req.reviewer_name, req.notes, action_id)
-    )
+    async with get_async_session() as session:
+        action = await session.get(PendingAction, action_id)
+        if not action:
+            raise HTTPException(status_code=404, detail="Proposal not found.")
+        
+        stmt = (
+            update(PendingAction)
+            .where(PendingAction.id == action_id)
+            .values(
+                status="APPROVED",
+                reviewed_by=req.reviewer_name,
+                reviewed_at=func.now(),
+                execution_notes=req.notes
+            )
+        )
+        await session.execute(stmt)
+        await session.commit()
     return {"status": "SUCCESS", "message": f"Proposal #{action_id} approved by {req.reviewer_name}."}
 
 @app.post("/api/pending_actions/{action_id}/reject")
 async def reject_action(action_id: int, req: ApprovalRequest):
     """
-    Rejects a proposed action asynchronously.
+    Rejects a proposed action asynchronously using SQLAlchemy.
     """
-    action = await query_db_async("SELECT id, status FROM pending_actions WHERE id = %s", (action_id,), fetchone=True)
-    if not action:
-        raise HTTPException(status_code=404, detail="Proposal not found.")
-    
-    await execute_insert_async(
-        """
-        UPDATE pending_actions 
-        SET status = 'REJECTED', reviewed_by = %s, reviewed_at = NOW(), execution_notes = %s
-        WHERE id = %s;
-        """,
-        (req.reviewer_name, req.notes, action_id)
-    )
+    async with get_async_session() as session:
+        action = await session.get(PendingAction, action_id)
+        if not action:
+            raise HTTPException(status_code=404, detail="Proposal not found.")
+        
+        stmt = (
+            update(PendingAction)
+            .where(PendingAction.id == action_id)
+            .values(
+                status="REJECTED",
+                reviewed_by=req.reviewer_name,
+                reviewed_at=func.now(),
+                execution_notes=req.notes
+            )
+        )
+        await session.execute(stmt)
+        await session.commit()
     return {"status": "SUCCESS", "message": f"Proposal #{action_id} rejected by {req.reviewer_name}."}
 
 @app.get("/api/ledger")

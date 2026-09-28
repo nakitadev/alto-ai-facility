@@ -1,20 +1,20 @@
 {
   "q1": {
     "top_machine": "AC-L1",
-    "top_kwh": 426.31
+    "top_kwh": 567.7
   },
   "q2": {
-    "day_2_kwh": 2346.21,
-    "day_6_kwh": 1631.3,
-    "difference_kwh": -714.91
+    "day_2_kwh": 2609.46,
+    "day_6_kwh": 2193.95,
+    "difference_kwh": -415.51
   },
   "q3": {
-    "manual_total_kwh": 7037.95,
-    "manual_avg_daily_kwh": 2345.98,
-    "ai_total_kwh": 6526.35,
-    "ai_avg_daily_kwh": 1631.59,
-    "savings_kwh_per_day": 714.39,
-    "savings_percent": 30.45
+    "manual_total_kwh": 7828.98,
+    "manual_avg_daily_kwh": 2609.66,
+    "ai_total_kwh": 8771.25,
+    "ai_avg_daily_kwh": 2192.81,
+    "savings_kwh_per_day": 416.85,
+    "savings_percent": 15.97
   },
   "q4": {
     "decisions_in_window": [
@@ -69,7 +69,7 @@
   },
   "q6": {
     "target_machine": "AC-L1",
-    "avg_lobby_temp_c": 24.19
+    "avg_lobby_temp_c": 24.21
   },
   "q7": {
     "is_unanswerable": true,

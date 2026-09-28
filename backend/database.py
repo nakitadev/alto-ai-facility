@@ -1,64 +1,91 @@
-import datetime
+"""
+Asynchronous Database Layer for AltoTech AI Engineer Assessment.
+Powered purely by SQLAlchemy 2.0 AsyncEngine and asyncpg.
+Zero synchronous blocking drivers or legacy shims.
+"""
+
 from zoneinfo import ZoneInfo
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from typing import Dict, Any, List, Optional, AsyncGenerator
+from contextlib import asynccontextmanager
+
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
 from backend.config import DATABASE_URL, DEFAULT_TIMEZONE
+from backend.models import Machine, SensorReading
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 UTC_TZ = ZoneInfo("UTC")
 
-def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+def _format_async_db_url(url: str) -> str:
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
 
-def query_db(query: str, params: tuple = None, fetchone: bool = False, fetchall: bool = True):
-    conn = get_connection()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query, params or ())
-            if fetchone:
-                return cur.fetchone()
-            if fetchall:
-                return cur.fetchall()
-            conn.commit()
-            return None
-    finally:
-        conn.close()
+ASYNC_DB_URL = _format_async_db_url(DATABASE_URL)
 
-import asyncio
+# Asynchronous SQLAlchemy Engine with Connection Pooling
+async_engine = create_async_engine(
+    ASYNC_DB_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20
+)
 
-async def query_db_async(query: str, params: tuple = None, fetchone: bool = False, fetchall: bool = True):
-    """Non-blocking async execution of query_db on a worker thread for ASGI applications."""
-    return await asyncio.to_thread(query_db, query, params, fetchone, fetchall)
+# Async Session Factory
+AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
 
-async def execute_insert_async(query: str, params: tuple = None) -> int:
-    """Non-blocking async execution of execute_insert on a worker thread for ASGI applications."""
-    return await asyncio.to_thread(execute_insert, query, params)
+@asynccontextmanager
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    """Provides a transactional asynchronous SQLAlchemy session context."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
 
+# ---------------------------------------------------------
+# Native SQLAlchemy Async Query Execution Helpers
+# ---------------------------------------------------------
+async def fetch_all_async(stmt) -> List[Dict[str, Any]]:
+    """Executes a SQLAlchemy select statement and returns rows as dictionaries."""
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        return [dict(r) for r in result.mappings().all()]
 
-def execute_insert(query: str, params: tuple = None) -> int:
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(query, params or ())
-            inserted_id = None
-            try:
-                inserted_id = cur.fetchone()[0]
-            except Exception:
-                pass
-            conn.commit()
-            return inserted_id
-    finally:
-        conn.close()
+async def fetch_one_async(stmt) -> Optional[Dict[str, Any]]:
+    """Executes a SQLAlchemy select statement and returns a single row dictionary."""
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        row = result.mappings().first()
+        return dict(row) if row else None
 
-def get_simulated_time_bounds():
+async def execute_stmt_async(stmt, commit: bool = True) -> Any:
+    """Executes an insert/update/delete statement asynchronously."""
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        if commit:
+            await session.commit()
+        return result
+
+# ---------------------------------------------------------
+# Dynamic Operational Bounds & Machine Registry (Async SQLAlchemy)
+# ---------------------------------------------------------
+async def get_simulated_time_bounds_async() -> Dict[str, Any]:
     """
-    Inspects TimescaleDB to dynamically find the operational boundaries
-    and facility current time in Bangkok time (UTC+7).
-    Derives all parameters purely from the database without any hardcoded mock defaults.
+    Asynchronously inspects TimescaleDB using SQLAlchemy to dynamically find
+    the operational boundaries and facility current time in Bangkok time (UTC+7).
     """
     try:
-        row = query_db("SELECT MIN(time) as min_time, MAX(time) as max_time FROM sensor_readings;", fetchone=True)
-        if not row or not row["min_time"]:
+        stmt = select(
+            func.min(SensorReading.time).label("min_time"),
+            func.max(SensorReading.time).label("max_time")
+        )
+        row = await fetch_one_async(stmt)
+        if not row or not row.get("min_time"):
             return {
                 "has_data": False,
                 "error": "No sensor readings found in database.",
@@ -94,17 +121,10 @@ def get_simulated_time_bounds():
             "days_available": 0
         }
 
-def get_registered_machines():
-    try:
-        return query_db("SELECT machine_name, machine_type, zone, floor, rated_power_kw, is_critical_24_7, description FROM machines ORDER BY machine_name;")
-    except Exception:
-        return []
-
-async def get_simulated_time_bounds_async():
-    """Non-blocking async time bounds lookup for ASGI endpoints."""
-    return await asyncio.to_thread(get_simulated_time_bounds)
-
-async def get_registered_machines_async():
-    """Non-blocking async machine registry lookup for ASGI endpoints."""
-    return await asyncio.to_thread(get_registered_machines)
-
+async def get_registered_machines_async() -> List[Dict[str, Any]]:
+    """Asynchronously queries registered machines using SQLAlchemy."""
+    stmt = select(Machine).order_by(Machine.machine_name)
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        machines = result.scalars().all()
+        return [m.to_dict() for m in machines]

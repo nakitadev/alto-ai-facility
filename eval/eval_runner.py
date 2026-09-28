@@ -173,7 +173,7 @@ async def run_evaluation_async(num_runs: int = 3, parallel: bool = False):
     # 1. Dynamically re-derive ground truth reference answers from TimescaleDB
     print("\n[Step 1] Deriving fresh ground truth reference answers from database via SQL...")
     try:
-        ref_answers = generate_reference_answers()
+        ref_answers = await generate_reference_answers()
     except Exception as e:
         print(f"Warning: Could not connect to TimescaleDB directly ({e}). Loading cached reference_answers.json...")
         if REF_PATH.exists():

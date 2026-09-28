@@ -3,7 +3,9 @@ import time
 import re
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
-from backend.database import query_db, execute_insert, query_db_async, execute_insert_async
+from backend.database import get_async_session
+from backend.models import Machine, SensorReading, AIDecision, PendingAction
+from sqlalchemy import select, func, cast, Date, Numeric, insert
 from backend.rag.retriever import retriever
 from backend.config import DEFAULT_TIMEZONE
 
@@ -13,7 +15,7 @@ UTC_TZ = ZoneInfo("UTC")
 _BASE_DATE_CACHE = None
 _CACHE_TIME = 0.0
 
-def get_base_date() -> Optional[datetime.date]:
+async def get_base_date_async() -> Optional[datetime.date]:
     """
     Dynamically anchors Day 1 to the actual earliest sensor reading in TimescaleDB.
     Enables arbitrary multi-week, monthly, or historical datasets without hardcoding.
@@ -24,8 +26,8 @@ def get_base_date() -> Optional[datetime.date]:
     if _BASE_DATE_CACHE and (now - _CACHE_TIME < 60.0):
         return _BASE_DATE_CACHE
     try:
-        from backend.database import get_simulated_time_bounds
-        bounds = get_simulated_time_bounds()
+        from backend.database import get_simulated_time_bounds_async
+        bounds = await get_simulated_time_bounds_async()
         if bounds.get("has_data") and "min_bkk" in bounds and bounds["min_bkk"] != "N/A":
             date_str = bounds["min_bkk"].split(" ")[0]
             _BASE_DATE_CACHE = datetime.date.fromisoformat(date_str)
@@ -35,9 +37,9 @@ def get_base_date() -> Optional[datetime.date]:
         pass
     return None
 
-def parse_bangkok_time(time_str: str) -> datetime.datetime:
+async def parse_bangkok_time(time_str: str) -> datetime.datetime:
     """
-    Parses various date/time formats and returns a UTC datetime.
+    Parses various date/time formats asynchronously and returns a UTC datetime.
     Supports:
       - 'Day N HH:MM' offsets from earliest database record
       - ISO-8601 formats and YYYY-MM-DD HH:MM:SS
@@ -50,7 +52,7 @@ def parse_bangkok_time(time_str: str) -> datetime.datetime:
         day_num = int(m_day.group(1))
         hour = int(m_day.group(2)) if m_day.group(2) else 0
         minute = int(m_day.group(3)) if m_day.group(3) else 0
-        base_date = get_base_date()
+        base_date = await get_base_date_async()
         if base_date:
             target_date = base_date + datetime.timedelta(days=day_num - 1)
             bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
@@ -77,180 +79,193 @@ def parse_bangkok_time(time_str: str) -> datetime.datetime:
         bkk_dt = datetime.datetime(date_parts[0], date_parts[1], date_parts[2], hour, minute, second, tzinfo=BANGKOK_TZ)
         return bkk_dt.astimezone(UTC_TZ)
 
-# Tool 1: Energy Aggregates (Async)
+# Tool 1: Energy Aggregates (Async with SQLAlchemy)
 async def query_energy_aggregates(start_time: str, end_time: str, machine_name: Optional[str] = None, group_by: str = "total") -> Dict[str, Any]:
     """
     Calculates deterministic electrical energy in kWh = SUM(power_kw * 5/60).
-    Aggregates by total, by day, or by machine in Bangkok time.
+    Aggregates by total, by day, or by machine in Bangkok time using SQLAlchemy expressions.
     """
-    start_utc = parse_bangkok_time(start_time)
-    end_utc = parse_bangkok_time(end_time)
+    start_utc = await parse_bangkok_time(start_time)
+    end_utc = await parse_bangkok_time(end_time)
 
-    params = [start_utc, end_utc]
-    machine_clause = ""
-    if machine_name:
-        machine_clause = "AND machine_name = %s"
-        params.append(machine_name)
+    kwh_expr = func.round(cast(func.sum(SensorReading.power_kw * 5.0 / 60.0), Numeric), 2)
+    avg_power_expr = func.round(cast(func.avg(SensorReading.power_kw), Numeric), 2)
+    peak_power_expr = func.round(cast(func.max(SensorReading.power_kw), Numeric), 2)
 
-    if group_by == "machine":
-        sql = f"""
-            SELECT 
-                machine_name,
-                ROUND(SUM(power_kw * 5.0 / 60.0)::numeric, 2) AS total_kwh,
-                ROUND(AVG(power_kw)::numeric, 2) AS avg_power_kw,
-                ROUND(MAX(power_kw)::numeric, 2) AS peak_power_kw,
-                COUNT(*) AS reading_count
-            FROM sensor_readings
-            WHERE time >= %s AND time <= %s {machine_clause}
-            GROUP BY machine_name
-            ORDER BY total_kwh DESC
-            LIMIT 50;
-        """
-        rows = await query_db_async(sql, tuple(params))
-        top_machine = rows[0]["machine_name"] if rows else None
-        top_kwh = float(rows[0]["total_kwh"]) if rows else 0.0
-        return {
-            "period": f"{start_time} to {end_time}",
-            "group_by": "machine",
-            "top_consumer": {"machine_name": top_machine, "energy_kwh": top_kwh},
-            "machines": [dict(r) for r in rows]
-        }
+    async with get_async_session() as session:
+        if group_by == "machine":
+            stmt = (
+                select(
+                    SensorReading.machine_name,
+                    kwh_expr.label("total_kwh"),
+                    avg_power_expr.label("avg_power_kw"),
+                    peak_power_expr.label("peak_power_kw"),
+                    func.count().label("reading_count")
+                )
+                .where(SensorReading.time >= start_utc, SensorReading.time <= end_utc)
+            )
+            if machine_name:
+                stmt = stmt.where(SensorReading.machine_name == machine_name)
 
-    elif group_by == "day":
-        sql = f"""
-            SELECT 
-                (time AT TIME ZONE 'Asia/Bangkok')::date AS bangkok_date,
-                ROUND(SUM(power_kw * 5.0 / 60.0)::numeric, 2) AS total_kwh,
-                COUNT(DISTINCT machine_name) AS active_machines
-            FROM sensor_readings
-            WHERE time >= %s AND time <= %s {machine_clause}
-            GROUP BY (time AT TIME ZONE 'Asia/Bangkok')::date
-            ORDER BY bangkok_date ASC
-            LIMIT 30;
-        """
-        rows = await query_db_async(sql, tuple(params))
-        base_date = get_base_date()
-        return {
-            "period": f"{start_time} to {end_time}",
-            "group_by": "day",
-            "daily_kwh": [{
-                "date": str(r["bangkok_date"]),
-                "kwh": float(r["total_kwh"]),
-                "day_number": (r["bangkok_date"] - base_date).days + 1
-            } for r in rows]
-        }
+            stmt = stmt.group_by(SensorReading.machine_name).order_by(kwh_expr.desc()).limit(50)
+            result = await session.execute(stmt)
+            rows = [dict(r) for r in result.mappings().all()]
 
-    else: # Total aggregate
-        sql = f"""
-            SELECT 
-                ROUND(SUM(power_kw * 5.0 / 60.0)::numeric, 2) AS total_kwh,
-                ROUND(AVG(power_kw)::numeric, 2) AS avg_power_kw,
-                ROUND(MAX(power_kw)::numeric, 2) AS max_power_kw,
-                COUNT(*) AS total_samples
-            FROM sensor_readings
-            WHERE time >= %s AND time <= %s {machine_clause};
-        """
-        row = await query_db_async(sql, tuple(params), fetchone=True)
-        return {
-            "start_time_bkk": start_time,
-            "end_time_bkk": end_time,
-            "machine_filter": machine_name or "ALL",
-            "total_energy_kwh": float(row["total_kwh"]) if row and row["total_kwh"] else 0.0,
-            "avg_power_kw": float(row["avg_power_kw"]) if row and row["avg_power_kw"] else 0.0,
-            "samples_analyzed": int(row["total_samples"]) if row else 0
-        }
+            top_machine = rows[0]["machine_name"] if rows else None
+            top_kwh = float(rows[0]["total_kwh"]) if rows else 0.0
+            return {
+                "period": f"{start_time} to {end_time}",
+                "group_by": "machine",
+                "top_consumer": {"machine_name": top_machine, "energy_kwh": top_kwh},
+                "machines": [{
+                    "machine_name": r["machine_name"],
+                    "total_kwh": float(r["total_kwh"]) if r["total_kwh"] is not None else 0.0,
+                    "avg_power_kw": float(r["avg_power_kw"]) if r["avg_power_kw"] is not None else 0.0,
+                    "peak_power_kw": float(r["peak_power_kw"]) if r["peak_power_kw"] is not None else 0.0,
+                    "reading_count": int(r["reading_count"])
+                } for r in rows]
+            }
 
-# Tool 2: Sensor Readings Statistics (Async)
+        elif group_by == "day":
+            bkk_date_col = cast(func.timezone("Asia/Bangkok", SensorReading.time), Date).label("bangkok_date")
+            stmt = (
+                select(
+                    bkk_date_col,
+                    kwh_expr.label("total_kwh"),
+                    func.count(func.distinct(SensorReading.machine_name)).label("active_machines")
+                )
+                .where(SensorReading.time >= start_utc, SensorReading.time <= end_utc)
+            )
+            if machine_name:
+                stmt = stmt.where(SensorReading.machine_name == machine_name)
+
+            stmt = stmt.group_by(bkk_date_col).order_by(bkk_date_col.asc()).limit(30)
+            result = await session.execute(stmt)
+            rows = [dict(r) for r in result.mappings().all()]
+            base_date = await get_base_date_async()
+            return {
+                "period": f"{start_time} to {end_time}",
+                "group_by": "day",
+                "daily_kwh": [{
+                    "date": str(r["bangkok_date"]),
+                    "kwh": float(r["total_kwh"]) if r["total_kwh"] is not None else 0.0,
+                    "day_number": (r["bangkok_date"] - base_date).days + 1 if base_date else None
+                } for r in rows]
+            }
+
+        else: # Total aggregate
+            stmt = (
+                select(
+                    kwh_expr.label("total_kwh"),
+                    avg_power_expr.label("avg_power_kw"),
+                    peak_power_expr.label("max_power_kw"),
+                    func.count().label("total_samples")
+                )
+                .where(SensorReading.time >= start_utc, SensorReading.time <= end_utc)
+            )
+            if machine_name:
+                stmt = stmt.where(SensorReading.machine_name == machine_name)
+
+            result = await session.execute(stmt)
+            row = result.mappings().first()
+            return {
+                "start_time_bkk": start_time,
+                "end_time_bkk": end_time,
+                "machine_filter": machine_name or "ALL",
+                "total_energy_kwh": float(row["total_kwh"]) if row and row["total_kwh"] is not None else 0.0,
+                "avg_power_kw": float(row["avg_power_kw"]) if row and row["avg_power_kw"] is not None else 0.0,
+                "samples_analyzed": int(row["total_samples"]) if row else 0
+            }
+
+# Tool 2: Sensor Readings Statistics (Async with SQLAlchemy)
 async def query_sensor_readings(machine_name: str, start_time: str, end_time: str, metric: str = "temperature", aggregate: str = "avg") -> Dict[str, Any]:
     """
     Queries sensor readings (temperature, power, setpoint, speed) for a machine.
-    Returns statistical aggregates to keep token budget bounded.
+    Returns statistical aggregates via SQLAlchemy to keep token budget bounded.
     """
-    start_utc = parse_bangkok_time(start_time)
-    end_utc = parse_bangkok_time(end_time)
+    start_utc = await parse_bangkok_time(start_time)
+    end_utc = await parse_bangkok_time(end_time)
 
-    sql = """
-        SELECT 
-            machine_name,
-            ROUND(AVG(temperature)::numeric, 2) AS avg_temperature_c,
-            ROUND(MIN(temperature)::numeric, 2) AS min_temperature_c,
-            ROUND(MAX(temperature)::numeric, 2) AS max_temperature_c,
-            ROUND(AVG(setpoint)::numeric, 2) AS avg_setpoint_c,
-            ROUND(AVG(power_kw)::numeric, 2) AS avg_power_kw,
-            ROUND(AVG(speed)::numeric, 2) AS avg_speed_pct,
-            COUNT(*) AS reading_count
-        FROM sensor_readings
-        WHERE machine_name = %s AND time >= %s AND time <= %s
-        GROUP BY machine_name;
-    """
-    row = await query_db_async(sql, (machine_name, start_utc, end_utc), fetchone=True)
-    if not row or row["reading_count"] == 0:
+    stmt = (
+        select(
+            SensorReading.machine_name,
+            func.round(cast(func.avg(SensorReading.temperature), Numeric), 2).label("avg_temperature_c"),
+            func.round(cast(func.min(SensorReading.temperature), Numeric), 2).label("min_temperature_c"),
+            func.round(cast(func.max(SensorReading.temperature), Numeric), 2).label("max_temperature_c"),
+            func.round(cast(func.avg(SensorReading.setpoint), Numeric), 2).label("avg_setpoint_c"),
+            func.round(cast(func.avg(SensorReading.power_kw), Numeric), 2).label("avg_power_kw"),
+            func.round(cast(func.avg(SensorReading.speed), Numeric), 2).label("avg_speed_pct"),
+            func.count().label("reading_count")
+        )
+        .where(SensorReading.machine_name == machine_name)
+        .where(SensorReading.time >= start_utc, SensorReading.time <= end_utc)
+        .group_by(SensorReading.machine_name)
+    )
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        row = result.mappings().first()
+        if not row or row["reading_count"] == 0:
+            return {
+                "machine_name": machine_name,
+                "message": f"No sensor records found for {machine_name} in requested interval."
+            }
+
         return {
             "machine_name": machine_name,
-            "message": f"No sensor records found for {machine_name} in requested interval."
+            "period": f"{start_time} to {end_time}",
+            "avg_temperature_c": float(row["avg_temperature_c"]) if row["avg_temperature_c"] is not None else None,
+            "min_temperature_c": float(row["min_temperature_c"]) if row["min_temperature_c"] is not None else None,
+            "max_temperature_c": float(row["max_temperature_c"]) if row["max_temperature_c"] is not None else None,
+            "avg_setpoint_c": float(row["avg_setpoint_c"]) if row["avg_setpoint_c"] is not None else None,
+            "avg_power_kw": float(row["avg_power_kw"]) if row["avg_power_kw"] is not None else 0.0,
+            "reading_count": int(row["reading_count"])
         }
 
-    return {
-        "machine_name": machine_name,
-        "period": f"{start_time} to {end_time}",
-        "avg_temperature_c": float(row["avg_temperature_c"]) if row["avg_temperature_c"] is not None else None,
-        "min_temperature_c": float(row["min_temperature_c"]) if row["min_temperature_c"] is not None else None,
-        "max_temperature_c": float(row["max_temperature_c"]) if row["max_temperature_c"] is not None else None,
-        "avg_setpoint_c": float(row["avg_setpoint_c"]) if row["avg_setpoint_c"] is not None else None,
-        "avg_power_kw": float(row["avg_power_kw"]) if row["avg_power_kw"] is not None else 0.0,
-        "reading_count": int(row["reading_count"])
-    }
-
-# Tool 3: AI Decisions Log (Async)
+# Tool 3: AI Decisions Log (Async with SQLAlchemy)
 async def query_ai_decisions(start_time: str, end_time: str, machine_name: Optional[str] = None, action: str = "ANY", limit: int = 20) -> Dict[str, Any]:
     """
-    Queries logged actions taken by the building AI in Days 4–7.
+    Queries logged actions taken by the building AI in Days 4–7 using SQLAlchemy.
     """
-    start_utc = parse_bangkok_time(start_time)
-    end_utc = parse_bangkok_time(end_time)
+    start_utc = await parse_bangkok_time(start_time)
+    end_utc = await parse_bangkok_time(end_time)
 
-    params = [start_utc, end_utc]
-    filters = []
+    bkk_time_col = func.timezone("Asia/Bangkok", AIDecision.timestamp).label("time_bkk")
+    stmt = (
+        select(
+            AIDecision.id,
+            bkk_time_col,
+            AIDecision.machine_name,
+            AIDecision.action,
+            AIDecision.parameter_value,
+            AIDecision.reason
+        )
+        .where(AIDecision.timestamp >= start_utc, AIDecision.timestamp <= end_utc)
+    )
     if machine_name:
-        filters.append("machine_name = %s")
-        params.append(machine_name)
+        stmt = stmt.where(AIDecision.machine_name == machine_name)
     if action != "ANY":
-        filters.append("action = %s")
-        params.append(action)
+        stmt = stmt.where(AIDecision.action == action)
 
-    filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
-    params.append(min(limit, 50))
+    stmt = stmt.order_by(AIDecision.timestamp.asc()).limit(min(limit, 50))
 
-    sql = f"""
-        SELECT 
-            id,
-            timestamp AT TIME ZONE 'Asia/Bangkok' as time_bkk,
-            machine_name,
-            action,
-            parameter_value,
-            reason
-        FROM ai_decisions
-        WHERE timestamp >= %s AND timestamp <= %s {filter_sql}
-        ORDER BY timestamp ASC
-        LIMIT %s;
-    """
-    rows = await query_db_async(sql, tuple(params))
-    
-    decisions = []
-    for r in rows:
-        decisions.append({
-            "time_bangkok": str(r["time_bkk"]),
-            "machine_name": r["machine_name"],
-            "action": r["action"],
-            "parameter": r["parameter_value"],
-            "reason": r["reason"]
-        })
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        rows = [dict(r) for r in result.mappings().all()]
+        decisions = []
+        for r in rows:
+            decisions.append({
+                "time_bangkok": str(r["time_bkk"]),
+                "machine_name": r["machine_name"],
+                "action": r["action"],
+                "parameter": r["parameter_value"],
+                "reason": r["reason"]
+            })
 
-    return {
-        "period": f"{start_time} to {end_time}",
-        "decision_count": len(decisions),
-        "decisions": decisions
-    }
+        return {
+            "period": f"{start_time} to {end_time}",
+            "decision_count": len(decisions),
+            "decisions": decisions
+        }
 
 # Tool 4: Search Documents (Async)
 async def search_docs(query: str, document_filter: str = "all") -> Dict[str, Any]:
@@ -264,15 +279,15 @@ async def search_docs(query: str, document_filter: str = "all") -> Dict[str, Any
         "chunks": chunks
     }
 
-# Tool 5: Propose Action (Problem 3 Option A - Async)
+# Tool 5: Propose Action (Problem 3 Option A - Async with SQLAlchemy)
 async def propose_control_action(machine_name: str, proposed_action: str, reasoning: str, parameter_value: str = "N/A") -> Dict[str, Any]:
     """
-    Creates an unexecuted proposal in pending_actions requiring operator confirmation.
+    Creates an unexecuted proposal in pending_actions requiring operator confirmation using SQLAlchemy.
     """
     clean_machine = machine_name.strip()
     try:
-        from backend.system1.guard import get_machine_registry
-        known_machines, aliases = get_machine_registry()
+        from backend.system1.guard import get_machine_registry_async
+        known_machines, aliases = await get_machine_registry_async()
         matched = False
         for m in known_machines:
             if m.lower() in clean_machine.lower():
@@ -296,14 +311,23 @@ async def propose_control_action(machine_name: str, proposed_action: str, reason
     except Exception:
         clean_machine = clean_machine[:64]
 
-    proposal_id = await execute_insert_async(
-        """
-        INSERT INTO pending_actions (machine_name, proposed_action, parameter_value, reasoning, status)
-        VALUES (%s, %s, %s, %s, 'PENDING')
-        RETURNING id;
-        """,
-        (clean_machine, str(proposed_action).strip(), str(parameter_value).strip(), str(reasoning).strip())
+    stmt = (
+        insert(PendingAction)
+        .values(
+            machine_name=clean_machine,
+            proposed_action=str(proposed_action).strip(),
+            parameter_value=str(parameter_value).strip(),
+            reasoning=str(reasoning).strip(),
+            status="PENDING"
+        )
+        .returning(PendingAction.id)
     )
+
+    async with get_async_session() as session:
+        result = await session.execute(stmt)
+        proposal_id = result.scalar()
+        await session.commit()
+
     return {
         "proposal_id": proposal_id,
         "machine_name": clean_machine,

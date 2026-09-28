@@ -2,7 +2,6 @@ import re
 import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
-from backend.database import execute_insert
 from backend.config import DEFAULT_TIMEZONE, TYPESAFE_API_KEY
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
@@ -12,9 +11,9 @@ import time
 _MACHINE_REGISTRY_CACHE = None
 _CACHE_TIMESTAMP = 0.0
 
-def get_machine_registry() -> tuple[list[str], dict[str, str]]:
+async def get_machine_registry_async() -> tuple[list[str], dict[str, str]]:
     """
-    Dynamically fetches machines and zone aliases from the database with 5-minute caching.
+    Non-blocking async machine registry discovery with 5-minute in-memory caching.
     Ensures zero-code scalability when new equipment or zones are added to PostgreSQL.
     """
     global _MACHINE_REGISTRY_CACHE, _CACHE_TIMESTAMP
@@ -23,8 +22,8 @@ def get_machine_registry() -> tuple[list[str], dict[str, str]]:
         return _MACHINE_REGISTRY_CACHE
 
     try:
-        from backend.database import get_registered_machines
-        machines = get_registered_machines()
+        from backend.database import get_registered_machines_async
+        machines = await get_registered_machines_async()
     except Exception:
         machines = []
 
@@ -50,11 +49,6 @@ def get_machine_registry() -> tuple[list[str], dict[str, str]]:
     _MACHINE_REGISTRY_CACHE = (names, aliases)
     _CACHE_TIMESTAMP = now
     return _MACHINE_REGISTRY_CACHE
-
-async def get_machine_registry_async() -> tuple[list[str], dict[str, str]]:
-    """Non-blocking async machine registry discovery for ASGI loops."""
-    import asyncio
-    return await asyncio.to_thread(get_machine_registry)
 
 
 try:
@@ -93,21 +87,7 @@ class JevSystemOneGuard:
                 print(f"Warning: Jev API call failed ({e}). Falling back to calibrated local Jev evaluator.")
 
         # 2. Calibrated Local Jev Decision Engine
-        return self._call_calibrated_jev(user_prompt)
-
-    def analyze_query_sync(self, user_prompt: str) -> Dict[str, Any]:
-        """Synchronous wrapper for legacy non-async environments."""
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return executor.submit(lambda: asyncio.run(self.analyze_query(user_prompt))).result()
-            else:
-                return loop.run_until_complete(self.analyze_query(user_prompt))
-        except Exception:
-            return self._call_calibrated_jev(user_prompt)
+        return await self._call_calibrated_jev(user_prompt)
 
     async def _call_live_jev(self, user_prompt: str) -> Dict[str, Any]:
         async with AsyncTypeSafeClient(api_key=self.api_key) as client:
@@ -164,7 +144,7 @@ class JevSystemOneGuard:
             chosen_intent = resp.answers["intent"].choice
             intent_confidence = float(resp.answers["intent"].confidence)
 
-            return self._route_from_probabilities(
+            return await self._route_from_probabilities(
                 user_prompt=user_prompt,
                 p_write=p_write,
                 p_unmonitored=p_unmonitored,
@@ -176,7 +156,7 @@ class JevSystemOneGuard:
             )
 
 
-    def _call_calibrated_jev(self, user_prompt: str) -> Dict[str, Any]:
+    async def _call_calibrated_jev(self, user_prompt: str) -> Dict[str, Any]:
         prompt_lower = user_prompt.lower()
         
         # Calibrated Noul probabilities
@@ -209,7 +189,7 @@ class JevSystemOneGuard:
         else:
             chosen_intent = "sensor_telemetry"
 
-        return self._route_from_probabilities(
+        return await self._route_from_probabilities(
             user_prompt=user_prompt,
             p_write=p_write,
             p_unmonitored=p_unmonitored,
@@ -218,7 +198,7 @@ class JevSystemOneGuard:
             provider="Jev-SystemOne-Calibrated"
         )
 
-    def _route_from_probabilities(
+    async def _route_from_probabilities(
         self,
         user_prompt: str,
         p_write: float,
@@ -257,7 +237,7 @@ class JevSystemOneGuard:
 
         # 3. Direct write command tripwire
         if p_write >= 0.70 or (chosen_intent == "write_command" and severity >= 1.5):
-            machine_names, zone_aliases = get_machine_registry()
+            machine_names, zone_aliases = await get_machine_registry_async()
             target_machine = None
             for m in machine_names:
                 if m.lower() in prompt_lower:
@@ -277,14 +257,24 @@ class JevSystemOneGuard:
             # Auto-record proposal into pending_actions table (Problem 3 Option A)
             proposal_id = None
             try:
-                proposal_id = execute_insert(
-                    """
-                    INSERT INTO pending_actions (machine_name, proposed_action, parameter_value, reasoning, status)
-                    VALUES (%s, %s, %s, %s, 'PENDING')
-                    RETURNING id;
-                    """,
-                    (target_machine, action, "N/A", f"Operator prompted: '{user_prompt}'")
+                from backend.database import get_async_session
+                from backend.models import PendingAction
+                from sqlalchemy import insert
+                stmt = (
+                    insert(PendingAction)
+                    .values(
+                        machine_name=target_machine,
+                        proposed_action=action,
+                        parameter_value="N/A",
+                        reasoning=f"Operator prompted: '{user_prompt}'",
+                        status="PENDING"
+                    )
+                    .returning(PendingAction.id)
                 )
+                async with get_async_session() as session:
+                    res = await session.execute(stmt)
+                    proposal_id = res.scalar()
+                    await session.commit()
             except Exception:
                 proposal_id = 999
 
@@ -306,8 +296,8 @@ class JevSystemOneGuard:
 
         # 4. Out of range check
         if re.search(r"\b(this\s+month|last\s+month|last\s+year|annual)\b", prompt_lower):
-            from backend.database import get_simulated_time_bounds
-            bounds = get_simulated_time_bounds()
+            from backend.database import get_simulated_time_bounds_async
+            bounds = await get_simulated_time_bounds_async()
             days_avail = bounds.get("days_available", 0)
             min_bkk = bounds.get("min_bkk", "N/A")
             max_bkk = bounds.get("max_bkk", "N/A")

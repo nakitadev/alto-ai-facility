@@ -3,6 +3,7 @@ import requests
 import json
 import os
 import html
+import uuid
 import pandas as pd
 
 # Backend API Configuration
@@ -145,6 +146,30 @@ with col_status:
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
+    if "conversation_id" not in st.session_state:
+        st.session_state.conversation_id = f"session_{uuid.uuid4().hex[:8]}"
+
+    col_btn, col_info = st.columns([2, 1])
+    if st.button("➕ New Chat Session", use_container_width=True):
+        if "conversation_id" in st.session_state:
+            try:
+                requests.post(
+                    f"{BACKEND_URL}/api/chat/reset",
+                    json={"conversation_id": st.session_state.conversation_id},
+                    timeout=3
+                )
+            except Exception:
+                pass
+        st.session_state.conversation_id = f"session_{uuid.uuid4().hex[:8]}"
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Sawadee krup Somchai! I'm your facility AI assistant for Bangkok Commercial Tower. How can I assist with building HVAC telemetry, energy consumption, or operating policies today?"}
+        ]
+        st.session_state.last_sample = None
+        st.rerun()
+
+    st.caption(f"Active Session: `{st.session_state.conversation_id}`")
+    st.divider()
+
     st.markdown("### ⚡ Benchmark Queries")
     sample_questions = [
         "Which machine consumed the most energy on day 5, and how much?",
@@ -248,7 +273,7 @@ with tab_console:
                     try:
                         resp = requests.post(
                             f"{BACKEND_URL}/api/chat/stream",
-                            json={"message": user_input, "conversation_id": "somchai_console_ui"},
+                            json={"message": user_input, "conversation_id": st.session_state.conversation_id},
                             stream=True,
                             timeout=90
                         )

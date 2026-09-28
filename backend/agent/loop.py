@@ -21,12 +21,12 @@ except Exception:
     pass
 
 from pydantic_ai import Agent, PartDeltaEvent, FunctionToolCallEvent, FunctionToolResultEvent, AgentRunResultEvent
-from pydantic_ai.messages import TextPartDelta
+from pydantic_ai.messages import ModelMessage, TextPartDelta
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.openai import OpenAIChatModel
 
-from backend.database import get_simulated_time_bounds, get_simulated_time_bounds_async
-from backend.system1.guard import system1_guard, get_machine_registry, get_machine_registry_async
+from backend.database import get_simulated_time_bounds_async
+from backend.system1.guard import system1_guard, get_machine_registry_async
 from backend.agent.tools import (
     query_energy_aggregates,
     query_sensor_readings,
@@ -34,7 +34,46 @@ from backend.agent.tools import (
     search_docs,
     propose_control_action
 )
-from backend.agent.cost_ledger import record_llm_call, record_llm_call_async
+from backend.agent.cost_ledger import record_llm_call_async
+
+# In-memory session store mapping conversation_id -> List[ModelMessage]
+SESSION_HISTORIES: Dict[str, List[ModelMessage]] = {}
+MAX_SESSION_TURNS = 3  # Retain up to the last 3 user-assistant interaction turns
+
+
+def get_session_history(conversation_id: str, max_turns: int = MAX_SESSION_TURNS) -> List[ModelMessage]:
+    """
+    Retrieves recent conversation history for a given conversation_id.
+    Maintains an atomic sliding window based on user prompt boundaries to ensure
+    tool calls and tool returns remain intact without exceeding context or token limits.
+    """
+    messages = SESSION_HISTORIES.get(conversation_id, [])
+    if not messages:
+        return []
+    
+    user_prompt_indices = [
+        idx for idx, m in enumerate(messages)
+        if getattr(m, "kind", "") == "request" and any(
+            type(p).__name__ == "UserPromptPart" for p in getattr(m, "parts", [])
+        )
+    ]
+    
+    if len(user_prompt_indices) > max_turns:
+        start_idx = user_prompt_indices[-max_turns]
+        return list(messages[start_idx:])
+    
+    return list(messages)
+
+
+def save_session_history(conversation_id: str, messages: List[ModelMessage]) -> None:
+    """Updates in-memory conversation history for a session."""
+    SESSION_HISTORIES[conversation_id] = list(messages)
+
+
+def clear_session_history(conversation_id: str) -> None:
+    """Clears history for a specific conversation session."""
+    SESSION_HISTORIES.pop(conversation_id, None)
+
 
 SYSTEM_PROMPT_TEMPLATE = """You are Somchai's AI Assistant for Bangkok Commercial Tower.
 Facility Time: {current_time_bkk} (Asia/Bangkok UTC+7).
@@ -121,7 +160,9 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
     model = OpenAIChatModel(OPENROUTER_MODEL, provider=provider)
     agent = Agent(model, system_prompt=prompt, tools=BUILDING_TOOLS)
 
-    run_res = await agent.run(user_prompt)
+    history = get_session_history(conversation_id)
+    run_res = await agent.run(user_prompt, message_history=history)
+    save_session_history(conversation_id, run_res.all_messages())
     latency_ms = (time.time() - start_time) * 1000.0
 
     executed_tools = []
@@ -215,7 +256,8 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
     final_result = None
     accumulated_output = ""
 
-    async with agent.run_stream_events(user_prompt) as events:
+    history = get_session_history(conversation_id)
+    async with agent.run_stream_events(user_prompt, message_history=history) as events:
         async for event in events:
             if isinstance(event, PartDeltaEvent):
                 if isinstance(event.delta, TextPartDelta):
@@ -239,6 +281,7 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
     final_response = str(final_result.output) if final_result and hasattr(final_result, "output") else accumulated_output
 
     if final_result:
+        save_session_history(conversation_id, final_result.all_messages())
         for msg in final_result.all_messages():
             for p in getattr(msg, "parts", []):
                 if type(p).__name__ == "ToolCallPart":
