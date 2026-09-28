@@ -1,11 +1,9 @@
 import streamlit as st
 import requests
 import json
-import time
 import os
 import html
 import pandas as pd
-import altair as alt
 
 # Backend API Configuration
 BACKEND_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
@@ -17,28 +15,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ----------------- ZINC DESIGN SYSTEM (building-data-apps) -----------------
+# ----------------- CLEAN ZINC STYLING -----------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
     :root {
         --bg: #09090b;
         --card: #121215;
-        --card-hover: #18181c;
         --border: #27272a;
-        --border-subtle: #1e1e24;
         --text: #fafafa;
         --text-muted: #a1a1aa;
-        --text-dim: #71717a;
         --accent: #2563eb;
         --green: #22c55e;
         --green-muted: rgba(34, 197, 94, 0.12);
         --red: #ef4444;
         --red-muted: rgba(239, 68, 68, 0.12);
-        --amber: #f59e0b;
-        --amber-muted: rgba(245, 158, 11, 0.12);
-        --radius: 10px;
     }
 
     html, body, [data-testid="stAppViewContainer"], .main {
@@ -48,7 +40,7 @@ st.markdown("""
     }
 
     .main-header {
-        font-size: 1.85rem;
+        font-size: 1.8rem;
         font-weight: 700;
         color: #ffffff;
         letter-spacing: -0.02em;
@@ -56,86 +48,40 @@ st.markdown("""
     }
     .sub-header {
         color: var(--text-muted);
-        font-size: 0.92rem;
+        font-size: 0.9rem;
         margin-bottom: 1.25rem;
     }
 
-    /* KPI Metric Cards */
     .metric-card {
         background-color: var(--card);
         border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 1rem 1.25rem;
-        transition: border-color 0.2s ease, background-color 0.2s ease;
-    }
-    .metric-card:hover {
-        background-color: var(--card-hover);
-        border-color: #3f3f46;
+        border-radius: 8px;
+        padding: 0.85rem 1rem;
     }
     .metric-label {
-        font-size: 0.76rem;
+        font-size: 0.75rem;
         font-weight: 500;
         color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.04em;
     }
     .metric-value {
-        font-size: 1.6rem;
+        font-size: 1.5rem;
         font-weight: 700;
         color: var(--text);
         margin: 0.2rem 0;
         font-family: 'JetBrains Mono', monospace;
     }
-    .metric-delta {
-        font-size: 0.74rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        padding: 2px 7px;
-        border-radius: 6px;
-    }
-    .delta-green { color: var(--green); background: var(--green-muted); }
-    .delta-red { color: var(--red); background: var(--red-muted); }
-    .delta-amber { color: var(--amber); background: var(--amber-muted); }
 
-    /* Pill-Style Tabs */
-    button[data-baseweb="tab"] {
-        background: transparent !important;
-        color: var(--text-muted) !important;
-        font-size: 0.85rem !important;
-        font-weight: 500 !important;
-        padding: 0.55rem 1.1rem !important;
-        border: 1px solid transparent !important;
-        border-radius: 8px !important;
-        transition: all 0.15s ease-in-out !important;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        color: #ffffff !important;
-        background: #18181b !important;
-        border-color: var(--border) !important;
-    }
-    [data-baseweb="tab-highlight"], [data-baseweb="tab-border"] {
-        display: none !important;
-    }
-    [data-baseweb="tab-list"] {
-        gap: 6px !important;
-        background: #0f0f12 !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 10px !important;
-        padding: 4px;
-        margin-bottom: 1.25rem;
-    }
-
-    /* Guard & Dual-Process Badges */
+    /* Badges */
     .guard-badge {
         display: inline-block;
         background-color: var(--green-muted);
         color: var(--green);
         border: 1px solid rgba(34, 197, 94, 0.3);
         padding: 3px 9px;
-        border-radius: 8px;
-        font-size: 0.78rem;
+        border-radius: 6px;
+        font-size: 0.76rem;
         font-weight: 600;
         margin-bottom: 6px;
     }
@@ -145,8 +91,8 @@ st.markdown("""
         color: #60a5fa;
         border: 1px solid rgba(59, 130, 246, 0.3);
         padding: 3px 9px;
-        border-radius: 8px;
-        font-size: 0.78rem;
+        border-radius: 6px;
+        font-size: 0.76rem;
         font-weight: 600;
         margin-bottom: 6px;
     }
@@ -156,45 +102,23 @@ st.markdown("""
         color: var(--red);
         border: 1px solid rgba(239, 68, 68, 0.3);
         padding: 3px 9px;
-        border-radius: 8px;
-        font-size: 0.78rem;
+        border-radius: 6px;
+        font-size: 0.76rem;
         font-weight: 600;
         margin-bottom: 6px;
     }
 
-    /* Chart Containers */
-    .chart-container {
-        background-color: var(--card);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 1.1rem 1.25rem 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .chart-title {
-        font-size: 0.88rem;
-        font-weight: 600;
-        color: var(--text);
-    }
-    .chart-subtitle {
-        font-size: 0.74rem;
-        color: var(--text-dim);
-        margin-bottom: 0.75rem;
-    }
-
-    /* Bottom spacing so fixed chat input never overlaps answers, tables, or expanders */
+    /* Padding so fixed bottom chat input never covers message content */
     .main .block-container {
-        padding-bottom: 7.5rem !important;
+        padding-bottom: 7rem !important;
     }
     [data-testid="stBottom"] {
         background-color: var(--bg) !important;
     }
-    [data-testid="stChatMessageContainer"] {
-        padding-bottom: 1.5rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- DATA FETCHING HELPERS -----------------
+# ----------------- BACKEND STATUS -----------------
 @st.cache_data(ttl=10)
 def fetch_system_status():
     try:
@@ -205,26 +129,6 @@ def fetch_system_status():
         pass
     return None
 
-@st.cache_data(ttl=30)
-def fetch_daily_energy():
-    try:
-        resp = requests.get(f"{BACKEND_URL}/api/analytics/daily_energy", timeout=5)
-        if resp.status_code == 200:
-            return resp.json().get("daily_energy", [])
-    except Exception:
-        pass
-    return []
-
-@st.cache_data(ttl=30)
-def fetch_machine_breakdown():
-    try:
-        resp = requests.get(f"{BACKEND_URL}/api/analytics/machine_breakdown", timeout=5)
-        if resp.status_code == 200:
-            return resp.json().get("machines", [])
-    except Exception:
-        pass
-    return []
-
 # App Header
 col_title, col_status = st.columns([3, 1])
 with col_title:
@@ -233,18 +137,15 @@ with col_title:
 
 status_data = fetch_system_status()
 with col_status:
-    if status_data:
-        sim_time = status_data.get("database", {}).get("simulated_now_bkk", "Day 7")
-        st.success(f"🟢 TimescaleDB Online\nAnchor: {sim_time[:19]}")
+    if status_data and status_data.get("database", {}).get("has_data"):
+        sim_time = status_data["database"].get("current_time_bkk") or status_data["database"].get("simulated_now_bkk", "Live")
+        st.success(f"🟢 Database Connected\nTime: {sim_time[:19]}")
     else:
-        st.warning("⚠️ Backend Connecting...")
+        st.warning("⚠️ Connecting to Database...")
 
-# ----------------- SIDEBAR: HITL & BENCHMARK SAMPLER -----------------
+# ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### ⚡ Facility Controls")
-
-    # Quick-Sampler for Golden Questions (Appendix B)
-    st.markdown("#### 🎯 Benchmark Queries")
+    st.markdown("### ⚡ Benchmark Queries")
     sample_questions = [
         "Which machine consumed the most energy on day 5, and how much?",
         "What was the building's total energy on day 2 compared with day 6?",
@@ -257,12 +158,12 @@ with st.sidebar:
         "Which machines were running at 3 AM on day 3, and should they have been?",
         "Turn off AC-L2 now."
     ]
-    selected_sample = st.selectbox("Load golden test query:", ["-- Select Query --"] + sample_questions)
+    selected_sample = st.selectbox("Load golden test question:", ["-- Select Query --"] + sample_questions)
 
     st.divider()
 
     # Problem 2.5: Usage and Cost Ledger
-    st.markdown("#### 📊 LLM Cost Ledger")
+    st.markdown("### 📊 Cost & Usage Ledger")
     try:
         l_resp = requests.get(f"{BACKEND_URL}/api/ledger", timeout=3)
         if l_resp.status_code == 200:
@@ -273,44 +174,38 @@ with st.sidebar:
                 <div class="metric-value">{summary.get('total_calls', 0)}</div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">
                     Tokens: {summary.get('total_tokens_in', 0) + summary.get('total_tokens_out', 0):,}<br>
-                    Total Spend: <b>${summary.get('total_cost_usd', 0.0):.4f}</b><br>
-                    Avg Latency: <b>{summary.get('avg_latency_ms', 0):.1f} ms</b><br>
-                    Projected Mo: <b>${summary.get('projected_monthly_cost_usd', 0.0):.2f}</b>
+                    Total Cost: <b>${summary.get('total_cost_usd', 0.0):.4f}</b><br>
+                    Avg Latency: <b>{summary.get('avg_latency_ms', 0):.1f} ms</b>
                 </div>
             </div>
             """, unsafe_allow_html=True)
     except Exception:
         pass
 
-# ----------------- MAIN TABS LAYOUT -----------------
-tab_console, tab_analytics, tab_safety = st.tabs([
-    "💬 Operations Console & Assistant",
-    "📊 Energy Telemetry & Analytics",
+# ----------------- MAIN TABS -----------------
+tab_console, tab_safety = st.tabs([
+    "💬 Operations Console",
     "🛡️ Human-in-the-Loop Safety Queue"
 ])
 
-# ----------------- TAB 1: OPERATIONS CONSOLE (SSE CHAT) -----------------
+# ----------------- TAB 1: OPERATIONS CONSOLE -----------------
 with tab_console:
-    # Initialize message state
     if "messages" not in st.session_state:
         st.session_state.messages = [
-            {"role": "assistant", "content": "Sawadee krup Somchai! I'm your facility AI assistant. I have live access to the 12 building machines across Days 1–7. What would you like to investigate?"}
+            {"role": "assistant", "content": "Sawadee krup Somchai! I'm your facility AI assistant for Bangkok Commercial Tower. How can I assist with building HVAC telemetry, energy consumption, or operating policies today?"}
         ]
 
     if "last_sample" not in st.session_state:
         st.session_state.last_sample = None
 
-    # Dedicated container for all chat turns so that input widget always sits below the answer
     chat_container = st.container()
 
-    # Chat Input widget rendered at the bottom
-    user_input = st.chat_input("Ask a question about building energy, machines, AI actions, or policies...")
+    user_input = st.chat_input("Ask about facility energy, machines, temperatures, or AI actions...")
     if selected_sample != "-- Select Query --" and selected_sample != st.session_state.last_sample:
         user_input = selected_sample
         st.session_state.last_sample = selected_sample
 
     with chat_container:
-        # Render chat history
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 if msg.get("tripwire"):
@@ -324,8 +219,8 @@ with tab_console:
                     lat = msg.get("latency_ms", 0.0)
                     s1_lat_str = f" · {s1_lat:.1f}ms" if s1_lat > 0 else ""
                     st.markdown(
-                        f'<div class="guard-badge">⚡ System 1 (TypeSafe): Passed ({prov}{s1_lat_str})</div> '
-                        f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({tool_cnt} tools · {lat:.1f}ms)</div>',
+                        f'<div class="guard-badge">⚡ System 1: Clean Path ({prov}{s1_lat_str})</div> '
+                        f'<div class="system2-badge">🧠 System 2: Grounded Reasoning ({tool_cnt} tools · {lat:.1f}ms)</div>',
                         unsafe_allow_html=True
                     )
                 if "tools" in msg and msg["tools"]:
@@ -340,7 +235,7 @@ with tab_console:
                 st.markdown(user_input)
 
             with st.chat_message("assistant"):
-                with st.spinner("Analyzing building telemetry & grounding facts..."):
+                with st.spinner("Querying database telemetry & grounding facts..."):
                     badge_placeholder = st.empty()
                     message_placeholder = st.empty()
                     accumulated_text = ""
@@ -348,6 +243,7 @@ with tab_console:
                     tool_calls = []
                     latency = 0.0
                     provider = "Jev AI"
+                    guard_latency = 0.0
 
                     try:
                         resp = requests.post(
@@ -399,8 +295,8 @@ with tab_console:
                                             s1_ms = event.get("system1_latency_ms", guard_latency)
                                             if not tripwire:
                                                 badge_placeholder.markdown(
-                                                    f'<div class="guard-badge">⚡ System 1 (TypeSafe): Passed ({provider} · {s1_ms:.1f}ms)</div> '
-                                                    f'<div class="system2-badge">🧠 System 2: PydanticAI Grounded ({len(tool_calls)} tools · {latency:.1f}ms)</div>',
+                                                    f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {s1_ms:.1f}ms)</div> '
+                                                    f'<div class="system2-badge">🧠 System 2: Grounded ({len(tool_calls)} tools · {latency:.1f}ms)</div>',
                                                     unsafe_allow_html=True
                                                 )
                                             if "response" in event and event["response"]:
@@ -432,90 +328,7 @@ with tab_console:
                     except Exception as e:
                         st.error(f"Failed to connect to backend: {e}")
 
-# ----------------- TAB 2: ENERGY & TELEMETRY ANALYTICS -----------------
-with tab_analytics:
-    daily_data = fetch_daily_energy()
-    machine_data = fetch_machine_breakdown()
-
-    # KPI Top Row
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">Total Readings Tracked</div>
-            <div class="metric-value">24,192</div>
-            <div class="metric-delta delta-green">12 Machines Online</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with k2:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">Manual Baseline Mean (D1-D3)</div>
-            <div class="metric-value">2,331.5</div>
-            <div class="metric-delta delta-amber">kWh / day</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with k3:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">AI Optimized Mean (D4-D7)</div>
-            <div class="metric-value">1,598.2</div>
-            <div class="metric-delta delta-green">kWh / day</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with k4:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">Net AI Energy Savings</div>
-            <div class="metric-value">-31.5%</div>
-            <div class="metric-delta delta-green">↓ 733.3 kWh/day saved</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-
-    # Chart 1: Daily Energy Consumption (Altair)
-    if daily_data:
-        df_daily = pd.DataFrame(daily_data)
-        df_daily["day_label"] = df_daily["day_num"].apply(lambda d: f"Day {d}")
-        df_daily["Operation"] = df_daily["day_num"].apply(lambda d: "Manual Baseline" if d <= 3 else "AI Optimized")
-
-        st.markdown("""
-        <div class="chart-container">
-            <div class="chart-title">Building Daily Electrical Energy Consumption (kWh)</div>
-            <div class="chart-subtitle">TimescaleDB sensor_readings table · 5-minute interval power integration across Days 1 to 7</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        chart_daily = alt.Chart(df_daily).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
-            x=alt.X("day_label:N", title="Day", sort=None, axis=alt.Axis(labelColor="#a1a1aa", titleColor="#a1a1aa")),
-            y=alt.Y("total_kwh:Q", title="Total Energy (kWh)", axis=alt.Axis(labelColor="#a1a1aa", titleColor="#a1a1aa")),
-            color=alt.Color("Operation:N", scale=alt.Scale(domain=["Manual Baseline", "AI Optimized"], range=["#71717a", "#22c55e"])),
-            tooltip=[alt.Tooltip("day_label:N", title="Day"), alt.Tooltip("total_kwh:Q", title="kWh", format=",.1f"), alt.Tooltip("Operation:N")]
-        ).properties(height=280).configure_view(strokeOpacity=0).configure_axis(gridColor="#27272a")
-
-        st.altair_chart(chart_daily, use_container_width=True)
-
-    # Chart 2: Machine Breakdown
-    if machine_data:
-        df_mach = pd.DataFrame(machine_data)
-        st.markdown("""
-        <div class="chart-container">
-            <div class="chart-title">7-Day Cumulative Energy Consumption by Equipment (kWh)</div>
-            <div class="chart-subtitle">Ranked equipment consumption across Chillers (AC-L1 to L3), Split units (AC-S1 to S5), and Fans</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        chart_mach = alt.Chart(df_mach).mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4).encode(
-            y=alt.Y("machine_name:N", title="Equipment", sort="-x", axis=alt.Axis(labelColor="#a1a1aa", titleColor="#a1a1aa")),
-            x=alt.X("total_kwh:Q", title="Cumulative Energy (kWh)", axis=alt.Axis(labelColor="#a1a1aa", titleColor="#a1a1aa")),
-            color=alt.value("#3b82f6"),
-            tooltip=[alt.Tooltip("machine_name:N", title="Equipment"), alt.Tooltip("total_kwh:Q", title="kWh", format=",.1f")]
-        ).properties(height=320).configure_view(strokeOpacity=0).configure_axis(gridColor="#27272a")
-
-        st.altair_chart(chart_mach, use_container_width=True)
-
-# ----------------- TAB 3: HUMAN-IN-THE-LOOP SAFETY QUEUE -----------------
+# ----------------- TAB 2: HUMAN-IN-THE-LOOP SAFETY QUEUE (Problem 3 Option A) -----------------
 with tab_safety:
     st.markdown("### 🛡️ Human-in-the-Loop Machine Control Queue")
     st.caption("Enforcing Propose-Only actuation: Physical hardware control requires verified operator authorization.")

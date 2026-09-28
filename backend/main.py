@@ -180,37 +180,6 @@ async def get_ledger():
     """
     return await get_ledger_summary_async()
 
-@app.get("/api/analytics/daily_energy")
-async def get_daily_energy():
-    """
-    Returns daily building electrical energy consumption across Days 1–7.
-    """
-    rows = await query_db_async("""
-        SELECT 
-            EXTRACT(DAY FROM time)::int as day_num,
-            ROUND(SUM(power_kw * (5.0/60.0))::numeric, 1)::float as total_kwh
-        FROM sensor_readings
-        WHERE EXTRACT(DAY FROM time) BETWEEN 1 AND 7
-        GROUP BY day_num
-        ORDER BY day_num;
-    """)
-    return {"daily_energy": [dict(r) for r in rows]}
-
-@app.get("/api/analytics/machine_breakdown")
-async def get_machine_breakdown():
-    """
-    Returns 7-day cumulative energy consumption by equipment.
-    """
-    rows = await query_db_async("""
-        SELECT 
-            machine_name,
-            ROUND(SUM(power_kw * (5.0/60.0))::numeric, 1)::float as total_kwh
-        FROM sensor_readings
-        GROUP BY machine_name
-        ORDER BY total_kwh DESC;
-    """)
-    return {"machines": [dict(r) for r in rows]}
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host=BACKEND_HOST, port=BACKEND_PORT, reload=True)

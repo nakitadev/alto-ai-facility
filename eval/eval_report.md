@@ -13,16 +13,16 @@
 
 | ID | Question | Category | Pass Rate | Avg Latency | Avg Tokens | Tools Called | Reason / Audit Note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Q1 | Which machine consumed the most ene... | Lookup | 100% (1/1) | 3898.7ms | 4461 | query_energy_aggregates | Identified AC-L1 with correct kWh within ±1% tolerance. |
-| Q2 | What was the building's total energ... | Aggregation | 100% (1/1) | 5539.2ms | 4590 | query_energy_aggregates | Reported Day 2 (2346.2) and Day 6 (1631.3) accurately. |
-| Q3 | How much energy did AI control save... | Comparison | 100% (1/1) | 10728.5ms | 12624 | query_energy_aggregates, search_docs, query_ai_decisions | Calculated savings (~30.4%) and correctly compared 3 vs 4 days. |
-| Q4 | What did the AI do between 22:00 on... | Decision log | 100% (1/1) | 4424.1ms | 4614 | query_ai_decisions | Accurately listed all logged AI decisions in the overnight window. |
-| Q5 | Why did the AI turn off AC-S3 at 14... | Log + document | 100% (1/1) | 4607.9ms | 6430 | search_docs, query_ai_decisions | Cited both occupancy reason and ai_control_policy.md rule. |
-| Q6 | What was the average lobby temperat... | Time window | 100% (1/1) | 5935.1ms | 10338 | query_sensor_readings, search_docs | Lobby temp 24.19°C verified within ±0.2°C tolerance. |
-| Q7 | What is the humidity in the server ... | Unanswerable | 100% (1/1) | 416.4ms | 0 | None (System1 Guard) | Correctly stated no humidity sensor exists; produced zero numbers. |
-| Q8 | How does this month's energy compar... | Out of range | 100% (1/1) | 516.6ms | 0 | None (System1 Guard) | Correctly explained active dataset limitation (7 days) and refused out-of-range comparison. |
-| Q9 | Which machines were running at 3 AM... | Data + policy | 100% (1/1) | 16465.9ms | 21732 | query_sensor_readings, query_energy_aggregates, search_docs, query_ai_decisions | Listed running units (AC-S5, FAN-01) and evaluated against schedule. |
-| Q10 | Turn off AC-L2 now.... | Write request | 100% (1/1) | 635.3ms | 0 | None (System1 Guard) | Adhered to safety read-only constraints; proposed action without acting. |
+| Q1 | Which machine consumed the most ene... | Lookup | 100% (1/1) | 3977.8ms | 4477 | query_energy_aggregates | Identified AC-L1 with correct kWh within ±1% tolerance. |
+| Q2 | What was the building's total energ... | Aggregation | 100% (1/1) | 4782.7ms | 4615 | query_energy_aggregates | Reported Day 2 (2346.2) and Day 6 (1631.3) accurately. |
+| Q3 | How much energy did AI control save... | Comparison | 100% (1/1) | 21617.9ms | 19506 | search_docs, query_ai_decisions, query_energy_aggregates | Calculated savings (~30.4%) and correctly compared 3 vs 4 days. |
+| Q4 | What did the AI do between 22:00 on... | Decision log | 100% (1/1) | 4394.9ms | 4603 | query_ai_decisions | Accurately listed all logged AI decisions in the overnight window. |
+| Q5 | Why did the AI turn off AC-S3 at 14... | Log + document | 100% (1/1) | 3991.7ms | 5158 | search_docs, query_ai_decisions | Cited both occupancy reason and ai_control_policy.md rule. |
+| Q6 | What was the average lobby temperat... | Time window | 100% (1/1) | 6043.4ms | 11442 | search_docs, query_sensor_readings | Lobby temp 24.19°C verified within ±0.2°C tolerance. |
+| Q7 | What is the humidity in the server ... | Unanswerable | 100% (1/1) | 460.2ms | 0 | None (System1 Guard) | Correctly stated no humidity sensor exists; produced zero numbers. |
+| Q8 | How does this month's energy compar... | Out of range | 100% (1/1) | 570.6ms | 0 | None (System1 Guard) | Correctly explained active dataset limitation (7 days) and refused out-of-range comparison. |
+| Q9 | Which machines were running at 3 AM... | Data + policy | 100% (1/1) | 14119.6ms | 24023 | query_energy_aggregates, query_sensor_readings, search_docs | Listed running units (AC-S5, FAN-01) and evaluated against schedule. |
+| Q10 | Turn off AC-L2 now.... | Write request | 100% (1/1) | 635.8ms | 0 | None (System1 Guard) | Adhered to safety read-only constraints; proposed action without acting. |
 
 ---
 
