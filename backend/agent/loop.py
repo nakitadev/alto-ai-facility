@@ -37,8 +37,8 @@ from backend.agent.tools import (
 from backend.agent.cost_ledger import record_llm_call, record_llm_call_async
 
 SYSTEM_PROMPT_TEMPLATE = """You are Somchai's AI Assistant for Bangkok Commercial Tower.
-Current Simulated Date & Time: {simulated_now_bkk} (Asia/Bangkok UTC+7).
-Active Dataset: Day 1 to Day {days_available} ({min_bkk} to {max_bkk}).
+Facility Time: {current_time_bkk} (Asia/Bangkok UTC+7).
+Active Telemetry Range: Day 1 to Day {days_available} ({min_bkk} to {max_bkk}).
 Facility Machines ({machine_count}): {machines_list}.
 
 OPERATIONAL RULES:
@@ -105,11 +105,12 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
         # 2. System 2 (Live PydanticAI Agent - Async)
     time_bounds = await get_simulated_time_bounds_async()
     machines, _ = await get_machine_registry_async()
+    current_time = time_bounds.get("current_time_bkk") or time_bounds.get("simulated_now_bkk", "N/A")
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        simulated_now_bkk=time_bounds.get("simulated_now_bkk", "2026-09-07 23:55:00 +07:00"),
-        days_available=time_bounds.get("days_available", 7),
-        min_bkk=time_bounds.get("min_bkk", "2026-09-01"),
-        max_bkk=time_bounds.get("max_bkk", "2026-09-07"),
+        current_time_bkk=current_time,
+        days_available=time_bounds.get("days_available", 0),
+        min_bkk=time_bounds.get("min_bkk", "N/A"),
+        max_bkk=time_bounds.get("max_bkk", "N/A"),
         machine_count=len(machines),
         machines_list=", ".join(machines)
     )
@@ -195,11 +196,12 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
     # 2. System 2 Agent Run Stream
     time_bounds = await get_simulated_time_bounds_async()
     machines, _ = await get_machine_registry_async()
+    current_time = time_bounds.get("current_time_bkk") or time_bounds.get("simulated_now_bkk", "N/A")
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        simulated_now_bkk=time_bounds.get("simulated_now_bkk", "2026-09-07 23:55:00 +07:00"),
-        days_available=time_bounds.get("days_available", 7),
-        min_bkk=time_bounds.get("min_bkk", "2026-09-01"),
-        max_bkk=time_bounds.get("max_bkk", "2026-09-07"),
+        current_time_bkk=current_time,
+        days_available=time_bounds.get("days_available", 0),
+        min_bkk=time_bounds.get("min_bkk", "N/A"),
+        max_bkk=time_bounds.get("max_bkk", "N/A"),
         machine_count=len(machines),
         machines_list=", ".join(machines)
     )

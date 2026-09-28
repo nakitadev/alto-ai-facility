@@ -53,21 +53,25 @@ def execute_insert(query: str, params: tuple = None) -> int:
 def get_simulated_time_bounds():
     """
     Inspects TimescaleDB to dynamically find the operational boundaries
-    and anchor the current simulated time in Bangkok time (UTC+7).
+    and facility current time in Bangkok time (UTC+7).
+    Derives all parameters purely from the database without any hardcoded mock defaults.
     """
     try:
         row = query_db("SELECT MIN(time) as min_time, MAX(time) as max_time FROM sensor_readings;", fetchone=True)
         if not row or not row["min_time"]:
             return {
                 "has_data": False,
-                "min_bkk": "2026-09-01 00:00:00+07:00",
-                "max_bkk": "2026-09-07 23:59:59+07:00",
-                "simulated_now_bkk": "2026-09-07 23:59:59+07:00",
-                "days_available": 7
+                "error": "No sensor readings found in database.",
+                "min_bkk": "N/A",
+                "max_bkk": "N/A",
+                "simulated_now_bkk": "N/A",
+                "current_time_bkk": "N/A",
+                "days_available": 0
             }
         
         min_bkk = row["min_time"].astimezone(BANGKOK_TZ)
         max_bkk = row["max_time"].astimezone(BANGKOK_TZ)
+        time_str = max_bkk.strftime("%Y-%m-%d %H:%M:%S %Z")
         
         return {
             "has_data": True,
@@ -75,15 +79,19 @@ def get_simulated_time_bounds():
             "max_utc": row["max_time"].isoformat(),
             "min_bkk": min_bkk.strftime("%Y-%m-%d %H:%M:%S %Z"),
             "max_bkk": max_bkk.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "simulated_now_bkk": max_bkk.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "simulated_now_bkk": time_str,
+            "current_time_bkk": time_str,
             "days_available": (max_bkk.date() - min_bkk.date()).days + 1
         }
     except Exception as e:
         return {
             "has_data": False,
             "error": str(e),
-            "simulated_now_bkk": "2026-09-07 23:59:59+07:00",
-            "days_available": 7
+            "min_bkk": "N/A",
+            "max_bkk": "N/A",
+            "simulated_now_bkk": "N/A",
+            "current_time_bkk": "N/A",
+            "days_available": 0
         }
 
 def get_registered_machines():

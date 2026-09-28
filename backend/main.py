@@ -32,8 +32,8 @@ from backend.agent.cost_ledger import get_ledger_summary_async
 async def lifespan(app: FastAPI):
     # ASGI Lifespan Startup: Non-blocking health check
     time_bounds = await get_simulated_time_bounds_async()
-    print(f"[ASGI Server Ready] TimescaleDB connected. Data range: Day 1 - Day {time_bounds.get('days_available', 7)}")
-    logfire.info("ASGI Server Ready with Logfire tracing", days_available=time_bounds.get('days_available', 7))
+    print(f"[ASGI Server Ready] TimescaleDB connected. Telemetry days: {time_bounds.get('days_available', 0)}")
+    logfire.info("ASGI Server Ready with Logfire tracing", days_available=time_bounds.get('days_available', 0))
     yield
     print("[ASGI Server Shutdown] Graceful termination complete.")
 

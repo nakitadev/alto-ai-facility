@@ -13,7 +13,7 @@ UTC_TZ = ZoneInfo("UTC")
 _BASE_DATE_CACHE = None
 _CACHE_TIME = 0.0
 
-def get_base_date() -> datetime.date:
+def get_base_date() -> Optional[datetime.date]:
     """
     Dynamically anchors Day 1 to the actual earliest sensor reading in TimescaleDB.
     Enables arbitrary multi-week, monthly, or historical datasets without hardcoding.
@@ -26,87 +26,35 @@ def get_base_date() -> datetime.date:
     try:
         from backend.database import get_simulated_time_bounds
         bounds = get_simulated_time_bounds()
-        if bounds.get("has_data") and "min_bkk" in bounds:
+        if bounds.get("has_data") and "min_bkk" in bounds and bounds["min_bkk"] != "N/A":
             date_str = bounds["min_bkk"].split(" ")[0]
             _BASE_DATE_CACHE = datetime.date.fromisoformat(date_str)
             _CACHE_TIME = now
             return _BASE_DATE_CACHE
     except Exception:
         pass
-    _BASE_DATE_CACHE = datetime.date(2026, 9, 1)
-    _CACHE_TIME = now
-    return _BASE_DATE_CACHE
-
-def get_simulated_now_bkk() -> datetime.datetime:
-    """
-    Returns current simulated moment in Bangkok time (Asia/Bangkok, UTC+7).
-    """
-    try:
-        from backend.database import get_simulated_time_bounds
-        bounds = get_simulated_time_bounds()
-        if bounds.get("has_data") and "max_bkk" in bounds:
-            raw = bounds["max_bkk"]
-            parts = raw.split(" ")
-            dt_part = parts[0] + "T" + parts[1]
-            return datetime.datetime.fromisoformat(dt_part).replace(tzinfo=BANGKOK_TZ)
-    except Exception:
-        pass
-    base_date = get_base_date()
-    day7 = base_date + datetime.timedelta(days=6)
-    return datetime.datetime(day7.year, day7.month, day7.day, 23, 59, 59, tzinfo=BANGKOK_TZ)
+    return None
 
 def parse_bangkok_time(time_str: str) -> datetime.datetime:
     """
     Parses various date/time formats and returns a UTC datetime.
     Supports:
-      - Relative simulated times: 'yesterday', 'today', 'now' in Bangkok time (UTC+7)
-      - 'Day N HH:MM' offsets from dataset start
+      - 'Day N HH:MM' offsets from earliest database record
       - ISO-8601 formats and YYYY-MM-DD HH:MM:SS
     """
     time_str = time_str.strip()
-    t_lower = time_str.lower()
-    
-    # Relative Bangkok terms: "yesterday", "today", "now"
-    if "yesterday" in t_lower:
-        sim_now = get_simulated_now_bkk()
-        target_date = sim_now.date() - datetime.timedelta(days=1)
-        m_time = re.search(r"(\d{1,2}):(\d{2})", t_lower)
-        if m_time:
-            hour, minute = int(m_time.group(1)), int(m_time.group(2))
-        elif "23:59" in t_lower or "end" in t_lower:
-            hour, minute = 23, 59
-        else:
-            hour, minute = 0, 0
-        bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
-        return bkk_dt.astimezone(UTC_TZ)
 
-    if "today" in t_lower:
-        sim_now = get_simulated_now_bkk()
-        target_date = sim_now.date()
-        m_time = re.search(r"(\d{1,2}):(\d{2})", t_lower)
-        if m_time:
-            hour, minute = int(m_time.group(1)), int(m_time.group(2))
-        elif "23:59" in t_lower or "end" in t_lower:
-            hour, minute = 23, 59
-        else:
-            hour, minute = 0, 0
-        bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
-        return bkk_dt.astimezone(UTC_TZ)
-
-    if t_lower == "now":
-        sim_now = get_simulated_now_bkk()
-        return sim_now.astimezone(UTC_TZ)
-
-    # Check for "Day N HH:MM" (scalable to any day number: Day 1, Day 14, Day 30)
+    # Check for "Day N HH:MM" (derived from actual DB start)
     m_day = re.match(r"(?i)day\s*(\d+)(?:\s+(\d{1,2}):(\d{2}))?", time_str)
     if m_day:
         day_num = int(m_day.group(1))
         hour = int(m_day.group(2)) if m_day.group(2) else 0
         minute = int(m_day.group(3)) if m_day.group(3) else 0
         base_date = get_base_date()
-        target_date = base_date + datetime.timedelta(days=day_num - 1)
-        bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
-        return bkk_dt.astimezone(UTC_TZ)
+        if base_date:
+            target_date = base_date + datetime.timedelta(days=day_num - 1)
+            bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
+            return bkk_dt.astimezone(UTC_TZ)
 
     # Try standard ISO or standard format
     clean_str = time_str.replace("Z", "+00:00")
@@ -376,8 +324,8 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "start_time": {"type": "string", "description": "Start time in Bangkok time (e.g., 'Day 2 00:00' or '2026-09-02 00:00')."},
-                    "end_time": {"type": "string", "description": "End time in Bangkok time (e.g., 'Day 2 23:59' or '2026-09-02 23:59')."},
+                    "start_time": {"type": "string", "description": "Start time in Bangkok time (e.g., 'Day 2 00:00' or 'YYYY-MM-DD HH:MM')."},
+                    "end_time": {"type": "string", "description": "End time in Bangkok time (e.g., 'Day 2 23:59' or 'YYYY-MM-DD HH:MM')."},
                     "machine_name": {"type": "string", "description": "Optional machine identifier (e.g., 'AC-L1'). Omit for whole building."},
                     "group_by": {"type": "string", "enum": ["total", "day", "machine"], "description": "Granularity of aggregation."}
                 },
@@ -406,7 +354,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "query_ai_decisions",
-            "description": "Searches the log of AI actions taken (TURN ON, TURN OFF, SET TEMP) during Days 4-7.",
+            "description": "Searches the log of automated actions taken (TURN ON, TURN OFF, SET TEMP).",
             "parameters": {
                 "type": "object",
                 "properties": {

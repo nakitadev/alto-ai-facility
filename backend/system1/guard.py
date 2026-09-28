@@ -9,35 +9,6 @@ BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 
 import time
 
-# Fallback defaults if database is unreachable
-DEFAULT_MACHINE_NAMES = [
-    "AC-L1", "AC-L2", "AC-L3",
-    "AC-S1", "AC-S2", "AC-S3", "AC-S4", "AC-S5",
-    "FAN-01", "FAN-02", "FAN-03", "FAN-04"
-]
-
-DEFAULT_ZONE_ALIASES = {
-    "lobby": "AC-L1",
-    "atrium": "AC-L1",
-    "zone a": "AC-L1",
-    "zone b": "AC-L2",
-    "floors 1-3": "AC-L2",
-    "zone c": "AC-L3",
-    "floors 4-6": "AC-L3",
-    "floor 1": "AC-S1",
-    "floor 2": "AC-S2",
-    "meeting room": "AC-S3",
-    "meeting rooms": "AC-S3",
-    "conference room": "AC-S3",
-    "executive": "AC-S4",
-    "floor 5": "AC-S4",
-    "server room": "AC-S5",
-    "data center": "AC-S5",
-    "datacenter": "AC-S5",
-    "basement": "FAN-01",
-    "parking": "FAN-01",
-}
-
 _MACHINE_REGISTRY_CACHE = None
 _CACHE_TIMESTAMP = 0.0
 
@@ -58,10 +29,10 @@ def get_machine_registry() -> tuple[list[str], dict[str, str]]:
         machines = []
 
     if not machines:
-        return DEFAULT_MACHINE_NAMES, DEFAULT_ZONE_ALIASES
+        return [], {}
 
     names = [m["machine_name"] for m in machines]
-    aliases = dict(DEFAULT_ZONE_ALIASES)
+    aliases = {}
 
     for m in machines:
         m_name = m["machine_name"]
@@ -297,7 +268,7 @@ class JevSystemOneGuard:
                     if alias in prompt_lower:
                         target_machine = m
                         break
-            target_machine = target_machine or (machine_names[0] if machine_names else "AC-L2")
+            target_machine = target_machine or (machine_names[0] if machine_names else "facility")
 
             action = "TURN OFF" if any(w in prompt_lower for w in ["off", "shut", "stop"]) else "TURN ON"
             if "set" in prompt_lower or "temp" in prompt_lower:
@@ -335,22 +306,17 @@ class JevSystemOneGuard:
 
         # 4. Out of range check
         if re.search(r"\b(this\s+month|last\s+month|last\s+year|annual)\b", prompt_lower):
-            try:
-                from backend.database import get_simulated_time_bounds
-                bounds = get_simulated_time_bounds()
-                days_avail = bounds.get("days_available", 7)
-                min_bkk = bounds.get("min_bkk", "Day 1")
-                max_bkk = bounds.get("max_bkk", f"Day {days_avail}")
-            except Exception:
-                days_avail = 7
-                min_bkk = "Day 1"
-                max_bkk = "Day 7"
+            from backend.database import get_simulated_time_bounds
+            bounds = get_simulated_time_bounds()
+            days_avail = bounds.get("days_available", 0)
+            min_bkk = bounds.get("min_bkk", "N/A")
+            max_bkk = bounds.get("max_bkk", "N/A")
             return {
                 "guard_triggered": True,
                 "intent": "TEMPORAL_OUT_OF_RANGE",
                 "provider": provider,
                 "immediate_response": (
-                    f"Our active dataset strictly spans {days_avail} days of 5-minute telemetry (Day 1 through Day {days_avail}, {min_bkk} to {max_bkk}). "
+                    f"Our active dataset strictly spans {days_avail} days of 5-minute telemetry ({min_bkk} to {max_bkk}). "
                     f"I cannot provide a month-over-month or annual comparison because data for previous months is not available. "
                     f"I can, however, compare individual days or aggregate periods within this available telemetry window."
                 )
