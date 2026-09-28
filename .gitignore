@@ -21,3 +21,5 @@ timescale_data/
 .idea/
 .DS_Store
 *.swp
+
+.agents
