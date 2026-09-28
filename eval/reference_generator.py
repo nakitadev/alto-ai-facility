@@ -7,7 +7,7 @@ import asyncio
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, func, cast, Numeric
-from backend.database import get_async_session, get_simulated_time_bounds_async
+from backend.database import get_session, get_simulated_time_bounds
 from backend.models import SensorReading, AIDecision
 from backend.agent.tools import parse_bangkok_time
 from backend.config import DEFAULT_TIMEZONE
@@ -20,11 +20,11 @@ OUTPUT_PATH = Path(__file__).resolve().parent / "reference_answers.json"
 async def generate_reference_answers() -> dict:
     """
     Derives deterministic ground truth reference values for all 10 Golden Questions
-    directly from TimescaleDB via SQLAlchemy AsyncSession.
+    directly from TimescaleDB via SQLAlchemy Session.
     """
     references = {}
 
-    async with get_async_session() as session:
+    async with get_session() as session:
         # Q1: Machine with most energy on day 5 and how much
         d5_start = await parse_bangkok_time("Day 5 00:00")
         d5_end = await parse_bangkok_time("Day 5 23:59")
@@ -149,7 +149,7 @@ async def generate_reference_answers() -> dict:
         }
 
         # Q8: This month vs last month
-        bounds = await get_simulated_time_bounds_async()
+        bounds = await get_simulated_time_bounds()
         references["q8"] = {
             "is_out_of_range": True,
             "available_days": bounds.get("days_available", 7)

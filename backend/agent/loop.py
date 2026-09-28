@@ -25,8 +25,8 @@ from pydantic_ai.messages import ModelMessage, TextPartDelta
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.openai import OpenAIChatModel
 
-from backend.database import get_simulated_time_bounds_async
-from backend.system1.guard import system1_guard, get_machine_registry_async
+from backend.database import get_simulated_time_bounds
+from backend.system1.guard import system1_guard, get_machine_registry
 from backend.agent.tools import (
     query_energy_aggregates,
     query_sensor_readings,
@@ -34,7 +34,7 @@ from backend.agent.tools import (
     search_docs,
     propose_control_action
 )
-from backend.agent.cost_ledger import record_llm_call_async
+from backend.agent.cost_ledger import record_llm_call
 
 # In-memory session store mapping conversation_id -> List[ModelMessage]
 SESSION_HISTORIES: Dict[str, List[ModelMessage]] = {}
@@ -123,7 +123,7 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
             s1_span.set_attribute("latency_ms", guard_ms)
 
         if guard["guard_triggered"]:
-            await record_llm_call_async(
+            await record_llm_call(
                 conversation_id=conversation_id,
                 model_name=guard.get("provider", "Jev-SystemOne"),
                 tokens_in=len(user_prompt.split()),
@@ -144,8 +144,8 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
             }
 
         # 2. System 2 (Live PydanticAI Agent - Async)
-    time_bounds = await get_simulated_time_bounds_async()
-    machines, _ = await get_machine_registry_async()
+    time_bounds = await get_simulated_time_bounds()
+    machines, _ = await get_machine_registry()
     current_time = time_bounds.get("current_time_bkk") or time_bounds.get("simulated_now_bkk", "N/A")
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
         current_time_bkk=current_time,
@@ -178,7 +178,7 @@ async def run_agent_loop(user_prompt: str, conversation_id: str = "default_conv"
     in_tokens = getattr(run_res.usage, "input_tokens", 0)
     out_tokens = getattr(run_res.usage, "output_tokens", 0)
 
-    await record_llm_call_async(
+    await record_llm_call(
         conversation_id=conversation_id,
         model_name=f"PydanticAI-{OPENROUTER_MODEL}",
         tokens_in=in_tokens,
@@ -218,7 +218,7 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
 
         if guard["guard_triggered"]:
             latency_ms = (time.time() - start_time) * 1000.0
-            await record_llm_call_async(
+            await record_llm_call(
                 conversation_id=conversation_id,
                 model_name=guard.get("provider", "Jev-SystemOne"),
                 tokens_in=len(user_prompt.split()),
@@ -237,8 +237,8 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
         yield f"data: {json.dumps({'type': 'guard', 'tripwire': None, 'intent': guard.get('intent', 'ANALYTICAL'), 'provider': guard.get('provider'), 'latency_ms': round(guard_ms, 2)})}\n\n"
 
     # 2. System 2 Agent Run Stream
-    time_bounds = await get_simulated_time_bounds_async()
-    machines, _ = await get_machine_registry_async()
+    time_bounds = await get_simulated_time_bounds()
+    machines, _ = await get_machine_registry()
     current_time = time_bounds.get("current_time_bkk") or time_bounds.get("simulated_now_bkk", "N/A")
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
         current_time_bkk=current_time,
@@ -296,7 +296,7 @@ async def stream_agent_loop(user_prompt: str, conversation_id: str = "default_co
         in_tokens = 0
         out_tokens = len(accumulated_output.split())
 
-    await record_llm_call_async(
+    await record_llm_call(
         conversation_id=conversation_id,
         model_name=f"PydanticAI-{OPENROUTER_MODEL}",
         tokens_in=in_tokens,

@@ -164,7 +164,7 @@ def evaluate_question(q_def: dict, ref: dict, result: dict) -> tuple[bool, str]:
 
 import asyncio
 
-async def run_evaluation_async(num_runs: int = 3, parallel: bool = False):
+async def run_evaluation_suite(num_runs: int = 3, parallel: bool = False):
     print("=" * 70)
     print("ALTO TECH AI ASSISTANT - REPEATABLE EVALUATION HARNESS (ASGI / ASYNC)")
     print(f"Executing {num_runs} full iterations across all 10 Golden Questions (Parallel={parallel})")
@@ -313,7 +313,7 @@ async def run_evaluation_async(num_runs: int = 3, parallel: bool = False):
     print(f"\nReport written to {REPORT_OUTPUT_PATH}")
 
 def run_evaluation(num_runs: int = 3, parallel: bool = False):
-    asyncio.run(run_evaluation_async(num_runs=num_runs, parallel=parallel))
+    asyncio.run(run_evaluation_suite(num_runs=num_runs, parallel=parallel))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run AltoTech AI Evaluation Harness")

@@ -18,19 +18,19 @@ logfire.configure(
 )
 
 from backend.database import (
-    get_async_session,
-    get_simulated_time_bounds_async,
-    get_registered_machines_async
+    get_session,
+    get_simulated_time_bounds,
+    get_registered_machines
 )
 from backend.models import PendingAction
 from sqlalchemy import select, update, func
 from backend.agent.loop import run_agent_loop, stream_agent_loop, clear_session_history
-from backend.agent.cost_ledger import get_ledger_summary_async
+from backend.agent.cost_ledger import get_ledger_summary
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ASGI Lifespan Startup: Non-blocking health check
-    time_bounds = await get_simulated_time_bounds_async()
+    time_bounds = await get_simulated_time_bounds()
     print(f"[ASGI Server Ready] TimescaleDB connected. Telemetry days: {time_bounds.get('days_available', 0)}")
     logfire.info("ASGI Server Ready with Logfire tracing", days_available=time_bounds.get('days_available', 0))
     yield
@@ -70,7 +70,7 @@ class ApprovalRequest(BaseModel):
 @app.get("/api/health")
 async def health_check():
     """ASGI Non-blocking health check verifying TimescaleDB connectivity."""
-    time_bounds = await get_simulated_time_bounds_async()
+    time_bounds = await get_simulated_time_bounds()
     return {
         "status": "healthy",
         "service": "AltoTech Energy Assistant (ASGI)",
@@ -80,13 +80,13 @@ async def health_check():
 @app.get("/api/machines")
 async def list_machines():
     """Returns registered building equipment asynchronously."""
-    machines = await get_registered_machines_async()
+    machines = await get_registered_machines()
     return {"machines": machines}
 
 @app.get("/api/time_bounds")
 async def time_bounds():
     """Returns active dataset temporal bounds asynchronously."""
-    return await get_simulated_time_bounds_async()
+    return await get_simulated_time_bounds()
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -138,7 +138,7 @@ async def list_pending_actions():
     Returns pending machine control proposals awaiting operator authorization (Problem 3 Option A) using SQLAlchemy.
     """
     stmt = select(PendingAction).order_by(PendingAction.proposed_at.desc()).limit(50)
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         actions = [a.to_dict() for a in result.scalars().all()]
         return {"pending_actions": actions}
@@ -148,7 +148,7 @@ async def approve_action(action_id: int, req: ApprovalRequest):
     """
     Approves a proposed action asynchronously using SQLAlchemy. Writes audit signature to database.
     """
-    async with get_async_session() as session:
+    async with get_session() as session:
         action = await session.get(PendingAction, action_id)
         if not action:
             raise HTTPException(status_code=404, detail="Proposal not found.")
@@ -172,7 +172,7 @@ async def reject_action(action_id: int, req: ApprovalRequest):
     """
     Rejects a proposed action asynchronously using SQLAlchemy.
     """
-    async with get_async_session() as session:
+    async with get_session() as session:
         action = await session.get(PendingAction, action_id)
         if not action:
             raise HTTPException(status_code=404, detail="Proposal not found.")
@@ -196,7 +196,7 @@ async def get_ledger():
     """
     Returns comprehensive usage and cost analytics for Somchai's boss asynchronously.
     """
-    return await get_ledger_summary_async()
+    return await get_ledger_summary()
 
 if __name__ == "__main__":
     import uvicorn

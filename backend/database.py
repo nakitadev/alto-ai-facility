@@ -17,30 +17,30 @@ from backend.models import Machine, SensorReading
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 UTC_TZ = ZoneInfo("UTC")
 
-def _format_async_db_url(url: str) -> str:
+def _format_db_url(url: str) -> str:
     if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+asyncpg://", 1)
     return url
 
-ASYNC_DB_URL = _format_async_db_url(DATABASE_URL)
+DB_URL = _format_db_url(DATABASE_URL)
 
-# Asynchronous SQLAlchemy Engine with Connection Pooling
-async_engine = create_async_engine(
-    ASYNC_DB_URL,
+# SQLAlchemy Async Engine with Connection Pooling
+engine = create_async_engine(
+    DB_URL,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20
 )
 
-# Async Session Factory
-AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
+# Session Factory
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 @asynccontextmanager
-async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Provides a transactional asynchronous SQLAlchemy session context."""
-    async with AsyncSessionLocal() as session:
+    async with SessionLocal() as session:
         try:
             yield session
         except Exception:
@@ -48,33 +48,33 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 # ---------------------------------------------------------
-# Native SQLAlchemy Async Query Execution Helpers
+# Native SQLAlchemy Query Execution Helpers
 # ---------------------------------------------------------
-async def fetch_all_async(stmt) -> List[Dict[str, Any]]:
+async def fetch_all(stmt) -> List[Dict[str, Any]]:
     """Executes a SQLAlchemy select statement and returns rows as dictionaries."""
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         return [dict(r) for r in result.mappings().all()]
 
-async def fetch_one_async(stmt) -> Optional[Dict[str, Any]]:
+async def fetch_one(stmt) -> Optional[Dict[str, Any]]:
     """Executes a SQLAlchemy select statement and returns a single row dictionary."""
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         row = result.mappings().first()
         return dict(row) if row else None
 
-async def execute_stmt_async(stmt, commit: bool = True) -> Any:
-    """Executes an insert/update/delete statement asynchronously."""
-    async with get_async_session() as session:
+async def execute_stmt(stmt, commit: bool = True) -> Any:
+    """Executes an insert/update/delete statement."""
+    async with get_session() as session:
         result = await session.execute(stmt)
         if commit:
             await session.commit()
         return result
 
 # ---------------------------------------------------------
-# Dynamic Operational Bounds & Machine Registry (Async SQLAlchemy)
+# Dynamic Operational Bounds & Machine Registry
 # ---------------------------------------------------------
-async def get_simulated_time_bounds_async() -> Dict[str, Any]:
+async def get_simulated_time_bounds() -> Dict[str, Any]:
     """
     Asynchronously inspects TimescaleDB using SQLAlchemy to dynamically find
     the operational boundaries and facility current time in Bangkok time (UTC+7).
@@ -84,7 +84,7 @@ async def get_simulated_time_bounds_async() -> Dict[str, Any]:
             func.min(SensorReading.time).label("min_time"),
             func.max(SensorReading.time).label("max_time")
         )
-        row = await fetch_one_async(stmt)
+        row = await fetch_one(stmt)
         if not row or not row.get("min_time"):
             return {
                 "has_data": False,
@@ -121,10 +121,10 @@ async def get_simulated_time_bounds_async() -> Dict[str, Any]:
             "days_available": 0
         }
 
-async def get_registered_machines_async() -> List[Dict[str, Any]]:
+async def get_registered_machines() -> List[Dict[str, Any]]:
     """Asynchronously queries registered machines using SQLAlchemy."""
     stmt = select(Machine).order_by(Machine.machine_name)
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         machines = result.scalars().all()
         return [m.to_dict() for m in machines]

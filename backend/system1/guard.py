@@ -11,9 +11,9 @@ import time
 _MACHINE_REGISTRY_CACHE = None
 _CACHE_TIMESTAMP = 0.0
 
-async def get_machine_registry_async() -> tuple[list[str], dict[str, str]]:
+async def get_machine_registry() -> tuple[list[str], dict[str, str]]:
     """
-    Non-blocking async machine registry discovery with 5-minute in-memory caching.
+    Async machine registry discovery with 5-minute in-memory caching.
     Ensures zero-code scalability when new equipment or zones are added to PostgreSQL.
     """
     global _MACHINE_REGISTRY_CACHE, _CACHE_TIMESTAMP
@@ -22,8 +22,8 @@ async def get_machine_registry_async() -> tuple[list[str], dict[str, str]]:
         return _MACHINE_REGISTRY_CACHE
 
     try:
-        from backend.database import get_registered_machines_async
-        machines = await get_registered_machines_async()
+        from backend.database import get_registered_machines
+        machines = await get_registered_machines()
     except Exception:
         machines = []
 
@@ -237,7 +237,7 @@ class JevSystemOneGuard:
 
         # 3. Direct write command tripwire
         if p_write >= 0.70 or (chosen_intent == "write_command" and severity >= 1.5):
-            machine_names, zone_aliases = await get_machine_registry_async()
+            machine_names, zone_aliases = await get_machine_registry()
             target_machine = None
             for m in machine_names:
                 if m.lower() in prompt_lower:
@@ -257,7 +257,7 @@ class JevSystemOneGuard:
             # Auto-record proposal into pending_actions table (Problem 3 Option A)
             proposal_id = None
             try:
-                from backend.database import get_async_session
+                from backend.database import get_session
                 from backend.models import PendingAction
                 from sqlalchemy import insert
                 stmt = (
@@ -271,7 +271,7 @@ class JevSystemOneGuard:
                     )
                     .returning(PendingAction.id)
                 )
-                async with get_async_session() as session:
+                async with get_session() as session:
                     res = await session.execute(stmt)
                     proposal_id = res.scalar()
                     await session.commit()
@@ -296,8 +296,8 @@ class JevSystemOneGuard:
 
         # 4. Out of range check
         if re.search(r"\b(this\s+month|last\s+month|last\s+year|annual)\b", prompt_lower):
-            from backend.database import get_simulated_time_bounds_async
-            bounds = await get_simulated_time_bounds_async()
+            from backend.database import get_simulated_time_bounds
+            bounds = await get_simulated_time_bounds()
             days_avail = bounds.get("days_available", 0)
             min_bkk = bounds.get("min_bkk", "N/A")
             max_bkk = bounds.get("max_bkk", "N/A")

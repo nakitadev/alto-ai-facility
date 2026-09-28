@@ -3,7 +3,7 @@ import time
 import re
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
-from backend.database import get_async_session
+from backend.database import get_session
 from backend.models import Machine, SensorReading, AIDecision, PendingAction
 from sqlalchemy import select, func, cast, Date, Numeric, insert
 from backend.rag.retriever import retriever
@@ -15,7 +15,7 @@ UTC_TZ = ZoneInfo("UTC")
 _BASE_DATE_CACHE = None
 _CACHE_TIME = 0.0
 
-async def get_base_date_async() -> Optional[datetime.date]:
+async def get_base_date() -> Optional[datetime.date]:
     """
     Dynamically anchors Day 1 to the actual earliest sensor reading in TimescaleDB.
     Enables arbitrary multi-week, monthly, or historical datasets without hardcoding.
@@ -26,8 +26,8 @@ async def get_base_date_async() -> Optional[datetime.date]:
     if _BASE_DATE_CACHE and (now - _CACHE_TIME < 60.0):
         return _BASE_DATE_CACHE
     try:
-        from backend.database import get_simulated_time_bounds_async
-        bounds = await get_simulated_time_bounds_async()
+        from backend.database import get_simulated_time_bounds
+        bounds = await get_simulated_time_bounds()
         if bounds.get("has_data") and "min_bkk" in bounds and bounds["min_bkk"] != "N/A":
             date_str = bounds["min_bkk"].split(" ")[0]
             _BASE_DATE_CACHE = datetime.date.fromisoformat(date_str)
@@ -52,7 +52,7 @@ async def parse_bangkok_time(time_str: str) -> datetime.datetime:
         day_num = int(m_day.group(1))
         hour = int(m_day.group(2)) if m_day.group(2) else 0
         minute = int(m_day.group(3)) if m_day.group(3) else 0
-        base_date = await get_base_date_async()
+        base_date = await get_base_date()
         if base_date:
             target_date = base_date + datetime.timedelta(days=day_num - 1)
             bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
@@ -92,7 +92,7 @@ async def query_energy_aggregates(start_time: str, end_time: str, machine_name: 
     avg_power_expr = func.round(cast(func.avg(SensorReading.power_kw), Numeric), 2)
     peak_power_expr = func.round(cast(func.max(SensorReading.power_kw), Numeric), 2)
 
-    async with get_async_session() as session:
+    async with get_session() as session:
         if group_by == "machine":
             stmt = (
                 select(
@@ -142,7 +142,7 @@ async def query_energy_aggregates(start_time: str, end_time: str, machine_name: 
             stmt = stmt.group_by(bkk_date_col).order_by(bkk_date_col.asc()).limit(30)
             result = await session.execute(stmt)
             rows = [dict(r) for r in result.mappings().all()]
-            base_date = await get_base_date_async()
+            base_date = await get_base_date()
             return {
                 "period": f"{start_time} to {end_time}",
                 "group_by": "day",
@@ -201,7 +201,7 @@ async def query_sensor_readings(machine_name: str, start_time: str, end_time: st
         .where(SensorReading.time >= start_utc, SensorReading.time <= end_utc)
         .group_by(SensorReading.machine_name)
     )
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         row = result.mappings().first()
         if not row or row["reading_count"] == 0:
@@ -248,7 +248,7 @@ async def query_ai_decisions(start_time: str, end_time: str, machine_name: Optio
 
     stmt = stmt.order_by(AIDecision.timestamp.asc()).limit(min(limit, 50))
 
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         rows = [dict(r) for r in result.mappings().all()]
         decisions = []
@@ -286,8 +286,8 @@ async def propose_control_action(machine_name: str, proposed_action: str, reason
     """
     clean_machine = machine_name.strip()
     try:
-        from backend.system1.guard import get_machine_registry_async
-        known_machines, aliases = await get_machine_registry_async()
+        from backend.system1.guard import get_machine_registry
+        known_machines, aliases = await get_machine_registry()
         matched = False
         for m in known_machines:
             if m.lower() in clean_machine.lower():
@@ -323,7 +323,7 @@ async def propose_control_action(machine_name: str, proposed_action: str, reason
         .returning(PendingAction.id)
     )
 
-    async with get_async_session() as session:
+    async with get_session() as session:
         result = await session.execute(stmt)
         proposal_id = result.scalar()
         await session.commit()

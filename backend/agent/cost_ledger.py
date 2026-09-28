@@ -7,7 +7,7 @@ import json
 from decimal import Decimal
 from typing import Dict, Any, List
 from sqlalchemy import select, func, insert
-from backend.database import get_async_session
+from backend.database import get_session
 from backend.models import LLMCostLedger
 
 # Estimated pricing per 1M tokens (USD)
@@ -40,7 +40,7 @@ def calculate_cost(model_name: str, tokens_in: int, tokens_out: int) -> float:
     cost = (tokens_in / 1_000_000.0 * pricing["input"]) + (tokens_out / 1_000_000.0 * pricing["output"])
     return round(cost, 6)
 
-async def record_llm_call_async(
+async def record_llm_call(
     conversation_id: str,
     model_name: str,
     tokens_in: int,
@@ -49,7 +49,7 @@ async def record_llm_call_async(
     intent_detected: str = "ANALYTICAL",
     tools_called: List[str] = None
 ) -> int:
-    """Non-blocking async cost ledger write using SQLAlchemy AsyncSession."""
+    """Cost ledger write using SQLAlchemy Session."""
     cost = calculate_cost(model_name, tokens_in, tokens_out)
     tools_str = json.dumps(tools_called or [])
     
@@ -64,7 +64,7 @@ async def record_llm_call_async(
             intent_detected=intent_detected,
             tools_called=tools_str
         ).returning(LLMCostLedger.id)
-        async with get_async_session() as session:
+        async with get_session() as session:
             result = await session.execute(stmt)
             call_id = result.scalar()
             await session.commit()
@@ -73,8 +73,8 @@ async def record_llm_call_async(
         print(f"Warning: Failed to record cost ledger: {e}")
         return 0
 
-async def get_ledger_summary_async() -> Dict[str, Any]:
-    """Non-blocking async cost ledger summary query using SQLAlchemy AsyncSession."""
+async def get_ledger_summary() -> Dict[str, Any]:
+    """Cost ledger summary query using SQLAlchemy Session."""
     try:
         stmt_sum = select(
             func.count().label("total_calls"),
@@ -85,7 +85,7 @@ async def get_ledger_summary_async() -> Dict[str, Any]:
         )
         stmt_recent = select(LLMCostLedger).order_by(LLMCostLedger.timestamp.desc()).limit(20)
 
-        async with get_async_session() as session:
+        async with get_session() as session:
             totals = (await session.execute(stmt_sum)).mappings().first()
             recent_res = await session.execute(stmt_recent)
             recent_calls = [m.to_dict() for m in recent_res.scalars().all()]
