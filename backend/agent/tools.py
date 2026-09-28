@@ -321,21 +321,48 @@ async def propose_control_action(machine_name: str, proposed_action: str, reason
     """
     Creates an unexecuted proposal in pending_actions requiring operator confirmation.
     """
+    clean_machine = machine_name.strip()
+    try:
+        from backend.system1.guard import get_machine_registry
+        known_machines, aliases = get_machine_registry()
+        matched = False
+        for m in known_machines:
+            if m.lower() in clean_machine.lower():
+                clean_machine = m
+                matched = True
+                break
+        if not matched:
+            for alias, target in aliases.items():
+                if alias in clean_machine.lower():
+                    clean_machine = target
+                    matched = True
+                    break
+        if not matched and known_machines:
+            for km in known_machines:
+                if km[:2].lower() in clean_machine.lower():
+                    clean_machine = km
+                    matched = True
+                    break
+            if not matched:
+                clean_machine = known_machines[0]
+    except Exception:
+        clean_machine = clean_machine[:64]
+
     proposal_id = await execute_insert_async(
         """
         INSERT INTO pending_actions (machine_name, proposed_action, parameter_value, reasoning, status)
         VALUES (%s, %s, %s, %s, 'PENDING')
         RETURNING id;
         """,
-        (machine_name, proposed_action, parameter_value, reasoning)
+        (clean_machine, str(proposed_action).strip(), str(parameter_value).strip(), str(reasoning).strip())
     )
     return {
         "proposal_id": proposal_id,
-        "machine_name": machine_name,
+        "machine_name": clean_machine,
         "proposed_action": proposed_action,
         "parameter_value": parameter_value,
         "status": "PENDING_CONFIRMATION",
-        "message": f"Proposal #{proposal_id} logged. Awaiting Somchai's authorization."
+        "message": f"Proposal #{proposal_id} logged for {clean_machine}. Awaiting Somchai's authorization."
     }
 
 

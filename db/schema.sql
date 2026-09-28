@@ -55,9 +55,9 @@ CREATE INDEX IF NOT EXISTS idx_ai_decisions_time_machine
 CREATE TABLE IF NOT EXISTS pending_actions (
     id SERIAL PRIMARY KEY,
     proposed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    machine_name VARCHAR(32) NOT NULL REFERENCES machines(machine_name),
-    proposed_action VARCHAR(32) NOT NULL,
-    parameter_value VARCHAR(64),
+    machine_name VARCHAR(64) NOT NULL REFERENCES machines(machine_name),
+    proposed_action TEXT NOT NULL,
+    parameter_value TEXT,
     reasoning TEXT NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
     reviewed_by VARCHAR(64),
