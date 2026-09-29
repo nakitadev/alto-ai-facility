@@ -38,6 +38,8 @@ async def get_db_connection():
     db_url = os.getenv("DATABASE_URL")
     if db_url:
         clean_url = db_url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
+        if clean_url.startswith("postgres://"):
+            clean_url = clean_url.replace("postgres://", "postgresql://", 1)
         return await asyncpg.connect(clean_url)
     
     return await asyncpg.connect(
