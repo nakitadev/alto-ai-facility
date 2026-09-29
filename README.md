@@ -38,7 +38,7 @@ make test
 
 ## 🧠 System Architecture
 
-![AltoTech Commercial Building AI Assistant Architecture](assets/architecture-diagram.png)
+![Smart Building AI Assistant Architecture](assets/architecture-diagram.png)
 
 > 💡 **Interactive Architecture Viewer**: Open [`architecture-diagram.html`](architecture-diagram.html) in any browser for interactive focus views, zoom/pan navigation, component inspection, and Dark/Light mode toggles.
 
