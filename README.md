@@ -1,4 +1,4 @@
-# AltoTech Commercial Building AI Assistant (Somchai's Console)
+# Smart Building AI Assistant — HVAC & Energy Intelligence Console
 
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.112+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
