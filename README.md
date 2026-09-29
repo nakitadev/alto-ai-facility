@@ -37,40 +37,10 @@ make test
 
 ## 🧠 System Architecture
 
-```mermaid
-flowchart TD
-    User([Operator / Streamlit UI]) -->|HTTP POST /api/chat (SSE Stream)| FastAPI[FastAPI ASGI Router]
-    
-    subgraph S1 ["System 1: Fast Guard (<90ms)"]
-        FastAPI --> Guard[Jev / TypeSafe Guard]
-        Guard -->|Tripwire: Write / Unmonitored / Injection / Out-of-Scope| FastReturn[Immediate Refusal / Action Proposal]
-    end
-    
-    subgraph S2 ["System 2: PydanticAI Reasoning Agent"]
-        Guard -->|Clean Path| AgentCore[FacilityAIClient / Agent]
-        AgentCore -->|Dynamic System Prompt| DB_Bounds[(TimescaleDB Bounds & Registry)]
-        AgentCore -->|Tool Call: SQL| SQLTools[backend/tools/sql_tools.py]
-        AgentCore -->|Tool Call: Docs| DocTools[backend/tools/doc_tools.py]
-        DocTools --> HybridRAG[BM25 + N-Gram Hybrid Retriever]
-        HybridRAG --> Policies[(docs/*.md Markdown Policies)]
-        SQLTools --> AsyncEngine[SQLAlchemy Async Engine]
-        AsyncEngine --> Timescale[(PostgreSQL + TimescaleDB)]
-    end
+![AltoTech Commercial Building AI Assistant Architecture](assets/architecture-diagram.png)
 
-    subgraph Streaming ["Real-Time Streaming & Observability"]
-        FastReturn -->|SSE Stream| SSE[SSEHandler]
-        AgentCore -->|SSE Events: guard -> tool_call -> tool_result -> token -> done| SSE
-        AgentCore -->|Audit Tokens & Cost| Ledger[Cost Ledger]
-        AgentCore -->|Traces & Spans| Logfire[Logfire OpenTelemetry]
-        SSE -->|Server-Sent Events| User
-    end
+> 💡 **Interactive Architecture Viewer**: Open [`architecture-diagram.html`](architecture-diagram.html) in any browser for interactive focus views, zoom/pan navigation, component inspection, and Dark/Light mode toggles.
 
-    subgraph HITL ["Human-in-the-Loop Safety Queue"]
-        SQLTools -->|propose_control_action| PendingActions[(pending_actions Table)]
-        User -->|Approve / Reject Action| ReviewAPI[FastAPI /api/pending_actions]
-        ReviewAPI --> PendingActions
-    end
-```
 
 ### Key Architectural Pillars:
 1. **Dual-Process Cognitive Architecture (Problem 3 Option E & A)**:
