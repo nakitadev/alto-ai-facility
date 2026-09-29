@@ -9,7 +9,7 @@
 [![Evaluation Pass Rate](https://img.shields.io/badge/Golden_Set_Pass_Rate-100%25_(30%2F30)-22c55e.svg?style=flat)]()
 [![Tests](https://img.shields.io/badge/Unit_Tests-32_Passed-22c55e.svg?style=flat)]()
 
-An enterprise-grade, grounded conversational AI assistant designed for facility managers and HVAC operators. Built for the **AltoTech Global AI Engineer Technical Assessment**, this system interfaces directly with **TimescaleDB** to deliver verified, deterministic insights across building cooling and ventilation equipment in Bangkok, Thailand (`Asia/Bangkok`, UTC+7).
+An enterprise-grade, grounded conversational AI assistant designed for facility managers and HVAC operators. this system interfaces directly with **TimescaleDB** to deliver verified, deterministic insights across building cooling and ventilation equipment in Bangkok, Thailand (`Asia/Bangkok`, UTC+7).
 
 ---
 
