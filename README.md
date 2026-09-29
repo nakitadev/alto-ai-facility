@@ -49,7 +49,7 @@ make test
    * **System 2 (Deliberative LLM Agent via `pydantic-ai`)**: Type-safe reasoning agent equipped with bounded domain tools. Injects live database temporal bounds on every turn and supports dynamic switching between verified **Free Tier OpenRouter models** (Llama 3.3 70B, Mistral Small, Gemma, Qwen).
 2. **Deterministic Energy Accounting via SQL Riemann Sums**:
    * Instantaneous power ($kW$) is converted to electrical energy ($kWh$) via exact in-engine integration:
-     $$\text{Energy (kWh)} = \sum \left( \text{power\_kw} \times \frac{5}{60} \right)$$
+                              Energy (kWh) = Σ (power_kw × 5/60)
    * The model is strictly insulated from performing mental arithmetic; math is executed deterministically by the database engine.
 3. **In-Memory Hybrid Document Retrieval (RAG)**:
    * Combines lexical keyword indexing (`rank-bm25`) with character 3-gram matching to handle exact equipment IDs (`AC-L1`, `AC-S3`) and policy documents with **sub-2ms latency** and zero external vector DB overhead.
