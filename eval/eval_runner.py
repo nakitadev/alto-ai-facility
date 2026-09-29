@@ -7,9 +7,9 @@ tool invocations, latency, tokens, and outputs an executive report.
 """
 
 import sys
-import os
 import json
 import re
+import datetime
 import argparse
 from pathlib import Path
 def format_table(headers, rows):
@@ -22,7 +22,8 @@ def format_table(headers, rows):
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from backend.agent.loop import run_agent_loop
+from backend.agent.core import FacilityAIClient
+from backend.agent.sse_handler import SSEHandler
 from eval.reference_generator import generate_reference_answers, OUTPUT_PATH as REF_PATH
 
 GOLDEN_QUESTIONS_PATH = Path(__file__).resolve().parent / "golden_questions.json"
@@ -187,57 +188,60 @@ async def run_evaluation_suite(num_runs: int = 3, parallel: bool = False):
     # Store results per question across runs
     question_stats = {q["id"]: {"passes": 0, "runs": 0, "latencies": [], "tokens": [], "tools": set(), "reasons": []} for q in golden_questions}
 
-    async def run_single_question(q, run_idx):
-        qid = q["id"]
-        prompt = q["question"]
-        max_retries = 4
-        result = None
-        for attempt in range(max_retries):
-            try:
-                result = await run_agent_loop(user_prompt=prompt, conversation_id=f"eval_run_{run_idx}_q{qid}")
-                break
-            except Exception as e:
-                if ("429" in str(e) or "rate limit" in str(e).lower()) and attempt < max_retries - 1:
-                    wait_s = 6 * (attempt + 1)
-                    print(f"    [Rate limit 429 for Q{qid}, backing off {wait_s}s before retry {attempt+1}...] ")
-                    await asyncio.sleep(wait_s)
-                else:
-                    raise
-        passed, reason = evaluate_question(q, ref_answers, result)
-        return qid, q, result, passed, reason
+    async with FacilityAIClient() as client:
+        async def run_single_question(q, run_idx):
+            qid = q["id"]
+            prompt = q["question"]
+            max_retries = 4
+            result = None
+            for attempt in range(max_retries):
+                try:
+                    result = await SSEHandler.parse_stream(
+                        client.chat_stream(user_prompt=prompt, conversation_id=f"eval_run_{run_idx}_q{qid}")
+                    )
+                    break
+                except Exception as e:
+                    if ("429" in str(e) or "rate limit" in str(e).lower()) and attempt < max_retries - 1:
+                        wait_s = 6 * (attempt + 1)
+                        print(f"    [Rate limit 429 for Q{qid}, backing off {wait_s}s before retry {attempt+1}...] ")
+                        await asyncio.sleep(wait_s)
+                    else:
+                        raise
+            passed, reason = evaluate_question(q, ref_answers, result)
+            return qid, q, result, passed, reason
 
-    for run_idx in range(1, num_runs + 1):
-        print(f"\n--- Running Iteration {run_idx}/{num_runs} ---")
-        if parallel:
-            tasks = [run_single_question(q, run_idx) for q in golden_questions]
-            results = await asyncio.gather(*tasks)
-            for qid, q, result, passed, reason in results:
-                stats = question_stats[qid]
-                stats["runs"] += 1
-                if passed:
-                    stats["passes"] += 1
-                stats["latencies"].append(result["latency_ms"])
-                stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
-                for tc in result.get("tool_calls", []):
-                    stats["tools"].add(tc.get("tool", "unknown"))
-                stats["reasons"].append(reason)
-                status_str = "PASS" if passed else "FAIL"
-                print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
-        else:
-            for q in golden_questions:
-                qid, _, result, passed, reason = await run_single_question(q, run_idx)
-                stats = question_stats[qid]
-                stats["runs"] += 1
-                if passed:
-                    stats["passes"] += 1
-                stats["latencies"].append(result["latency_ms"])
-                stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
-                for tc in result.get("tool_calls", []):
-                    stats["tools"].add(tc.get("tool", "unknown"))
-                stats["reasons"].append(reason)
-                status_str = "PASS" if passed else "FAIL"
-                print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
-                await asyncio.sleep(1.0)
+        for run_idx in range(1, num_runs + 1):
+            print(f"\n--- Running Iteration {run_idx}/{num_runs} ---")
+            if parallel:
+                tasks = [run_single_question(q, run_idx) for q in golden_questions]
+                results = await asyncio.gather(*tasks)
+                for qid, q, result, passed, reason in results:
+                    stats = question_stats[qid]
+                    stats["runs"] += 1
+                    if passed:
+                        stats["passes"] += 1
+                    stats["latencies"].append(result["latency_ms"])
+                    stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
+                    for tc in result.get("tool_calls", []):
+                        stats["tools"].add(tc.get("tool", "unknown"))
+                    stats["reasons"].append(reason)
+                    status_str = "PASS" if passed else "FAIL"
+                    print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
+            else:
+                for q in golden_questions:
+                    qid, _, result, passed, reason = await run_single_question(q, run_idx)
+                    stats = question_stats[qid]
+                    stats["runs"] += 1
+                    if passed:
+                        stats["passes"] += 1
+                    stats["latencies"].append(result["latency_ms"])
+                    stats["tokens"].append(result["tokens_in"] + result["tokens_out"])
+                    for tc in result.get("tool_calls", []):
+                        stats["tools"].add(tc.get("tool", "unknown"))
+                    stats["reasons"].append(reason)
+                    status_str = "PASS" if passed else "FAIL"
+                    print(f"  Q{qid:02d} [{status_str}]: {q['category']:<15} | Latency: {result['latency_ms']}ms | Reason: {reason}")
+                    await asyncio.sleep(1.0)
 
     # Build Summary Table
     table_data = []
@@ -298,7 +302,7 @@ async def run_evaluation_suite(num_runs: int = 3, parallel: bool = False):
 ## Evaluation Insights & Behavioral Verification
 
 1. **Deterministic Precision (Questions 1, 2, 3, 6)**:
-   * Aggregations directly integrate $\sum \text{{power\_kw}} \times \frac{{5}}{{60}}$, matching TimescaleDB SQL ground truth within ±1.0%.
+   * Aggregations directly integrate $\\sum \\text{{power\\_kw}} \\times \\frac{{5}}{{60}}$, matching TimescaleDB SQL ground truth within ±1.0%.
    * Lobby office-hours temperature correctly resolves to unit `AC-L1` between 08:00 and 18:00 Bangkok time.
 
 2. **Security & Prompt Injection Resistance (Question 3)**:
@@ -311,6 +315,33 @@ async def run_evaluation_suite(num_runs: int = 3, parallel: bool = False):
 """
     REPORT_OUTPUT_PATH.write_text(markdown_report, encoding="utf-8")
     print(f"\nReport written to {REPORT_OUTPUT_PATH}")
+
+    # Also save structured JSON record in eval/results/ for repeatable verification
+    results_dir = Path(__file__).resolve().parent / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_record_path = results_dir / f"eval_run_{ts}.json"
+    run_record = {
+        "timestamp": ts,
+        "runs": num_runs,
+        "overall_pass_rate": round(overall_pass_rate, 2),
+        "total_passed": total_passed,
+        "total_runs": total_runs,
+        "questions": {
+            qid: {
+                "category": q["category"],
+                "question": q["question"],
+                "pass_rate": round(question_stats[qid]["passes"] / max(question_stats[qid]["runs"], 1) * 100, 1),
+                "avg_latency_ms": round(sum(question_stats[qid]["latencies"]) / max(len(question_stats[qid]["latencies"]), 1), 2),
+                "avg_tokens": int(sum(question_stats[qid]["tokens"]) / max(len(question_stats[qid]["tokens"]), 1)),
+                "tools": list(question_stats[qid]["tools"]),
+                "audit_notes": question_stats[qid]["reasons"]
+            }
+            for qid, q in ((q["id"], q) for q in golden_questions)
+        }
+    }
+    run_record_path.write_text(json.dumps(run_record, indent=2), encoding="utf-8")
+    print(f"Repeatable execution record saved to {run_record_path}")
 
 def run_evaluation(num_runs: int = 3, parallel: bool = False):
     asyncio.run(run_evaluation_suite(num_runs=num_runs, parallel=parallel))

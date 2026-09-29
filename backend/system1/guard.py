@@ -1,12 +1,10 @@
 import re
-import datetime
+import time
 from zoneinfo import ZoneInfo
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from backend.config import DEFAULT_TIMEZONE, TYPESAFE_API_KEY
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
-
-import time
 
 _MACHINE_REGISTRY_CACHE = None
 _CACHE_TIMESTAMP = 0.0
@@ -52,7 +50,7 @@ async def get_machine_registry() -> tuple[list[str], dict[str, str]]:
 
 
 try:
-    from typesafe_sdk import AsyncTypeSafeClient, TypeSafeClient, Choice, Noul, NoulCriteria, Score
+    from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, NoulCriteria, Score
     TYPESAFE_AVAILABLE = True
 except ImportError:
     TYPESAFE_AVAILABLE = False

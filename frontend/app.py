@@ -130,6 +130,26 @@ def fetch_system_status():
         pass
     return None
 
+@st.cache_data(ttl=60)
+def fetch_available_models():
+    try:
+        resp = requests.get(f"{BACKEND_URL}/api/models", timeout=3)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {
+        "models": [
+            {"id": "inclusionai/ling-3.0-flash-sante:free", "name": "Ling 3.0 Flash (Default · Ultra-Fast)", "context_length": "256k"},
+            {"id": "nvidia/nemotron-3.5-lightning:free", "name": "NVIDIA Nemotron 3.5 Lightning (High Precision)", "context_length": "1,000k"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "name": "NVIDIA Nemotron 3 Ultra 550B (Deep Reasoning)", "context_length": "1,000k"},
+            {"id": "google/gemma-4-31b-it:free", "name": "Google Gemma 4 31B Instruct", "context_length": "262k"},
+            {"id": "qwen/qwen3.8-27b:free", "name": "Qwen 3.8 27B Instruct", "context_length": "262k"},
+            {"id": "openrouter/free", "name": "OpenRouter Auto-Free Router", "context_length": "200k"}
+        ],
+        "default": "inclusionai/ling-3.0-flash-sante:free"
+    }
+
 # App Header
 col_title, col_status = st.columns([3, 1])
 with col_title:
@@ -168,6 +188,27 @@ with st.sidebar:
         st.rerun()
 
     st.caption(f"Active Session: `{st.session_state.conversation_id}`")
+    st.divider()
+
+    # OpenRouter Free Model Selector
+    st.markdown("### 🤖 OpenRouter Model (Free)")
+    models_data = fetch_available_models()
+    model_list = models_data.get("models", [])
+    model_options = {m["name"]: m["id"] for m in model_list}
+    default_id = models_data.get("default", "inclusionai/ling-3.0-flash-sante:free")
+    
+    default_name = next((k for k, v in model_options.items() if v == default_id), list(model_options.keys())[0] if model_options else "Default")
+    default_idx = list(model_options.keys()).index(default_name) if default_name in model_options else 0
+
+    selected_model_name = st.selectbox(
+        "Active Free Model:",
+        options=list(model_options.keys()),
+        index=default_idx,
+        help="All models are 100% verified Free Tier on OpenRouter supporting function calling."
+    )
+    selected_model_id = model_options.get(selected_model_name, default_id)
+    st.session_state.selected_model = selected_model_id
+    st.caption(f"Endpoint: `{selected_model_id}` · Free Tier 🟢")
     st.divider()
 
     st.markdown("### ⚡ Benchmark Queries")
@@ -243,15 +284,23 @@ with tab_console:
                     s1_lat = msg.get("system1_latency_ms", 0.0)
                     lat = msg.get("latency_ms", 0.0)
                     s1_lat_str = f" · {s1_lat:.1f}ms" if s1_lat > 0 else ""
+                    raw_model = msg.get("model_name", "OpenRouter Free")
+                    model_label = html.escape(raw_model.split("/")[-1] if "/" in raw_model else raw_model)
                     st.markdown(
                         f'<div class="guard-badge">⚡ System 1: Clean Path ({prov}{s1_lat_str})</div> '
-                        f'<div class="system2-badge">🧠 System 2: Grounded Reasoning ({tool_cnt} tools · {lat:.1f}ms)</div>',
+                        f'<div class="system2-badge">🧠 System 2: Grounded ({model_label} · {tool_cnt} tools · {lat:.1f}ms)</div>',
                         unsafe_allow_html=True
                     )
                 if "tools" in msg and msg["tools"]:
-                    with st.expander(f"🔍 Grounding Evidence ({len(msg['tools'])} tools inspected)", expanded=False):
+                    with st.expander(f"🔍 Grounding Evidence ({len(msg['tools'])} database queries inspected)", expanded=False):
                         for tc in msg["tools"]:
-                            st.code(f"Tool: {tc.get('tool')}\nResult: {json.dumps(tc.get('result'), indent=2)}", language="json")
+                            st.markdown(f"**🔧 Executed Tool**: `{tc.get('tool')}`")
+                            if tc.get("arguments"):
+                                st.caption("Database Query Parameters:")
+                                st.json(tc.get("arguments"))
+                            if tc.get("result"):
+                                st.caption("TimescaleDB Ground Truth Telemetry:")
+                                st.json(tc.get("result"))
                 st.markdown(msg["content"])
 
         if user_input:
@@ -260,7 +309,7 @@ with tab_console:
                 st.markdown(user_input)
 
             with st.chat_message("assistant"):
-                with st.spinner("Querying database telemetry & grounding facts..."):
+                with st.spinner("Connecting to TimescaleDB & grounding facts..."):
                     badge_placeholder = st.empty()
                     message_placeholder = st.empty()
                     accumulated_text = ""
@@ -269,11 +318,17 @@ with tab_console:
                     latency = 0.0
                     provider = "Jev AI"
                     guard_latency = 0.0
+                    chosen_model = st.session_state.get("selected_model")
+                    active_model = chosen_model
 
                     try:
                         resp = requests.post(
-                            f"{BACKEND_URL}/api/chat/stream",
-                            json={"message": user_input, "conversation_id": st.session_state.conversation_id},
+                            f"{BACKEND_URL}/api/chat",
+                            json={
+                                "message": user_input,
+                                "conversation_id": st.session_state.conversation_id,
+                                "model": chosen_model
+                            },
                             stream=True,
                             timeout=90
                         )
@@ -299,45 +354,59 @@ with tab_console:
                                             else:
                                                 badge_placeholder.markdown(
                                                     f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
-                                                    f'<div class="system2-badge">🧠 System 2: Deliberating & Querying Tools...</div>',
+                                                    f'<div class="system2-badge">🧠 System 2: Deliberating & Inspecting Database...</div>',
                                                     unsafe_allow_html=True
                                                 )
                                         elif etype == "tool_call":
                                             tool_name = html.escape(str(event.get("tool", "tool")))
+                                            if tool_name == "deliberating":
+                                                badge_placeholder.markdown(
+                                                    f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
+                                                    f'<div class="system2-badge">🧠 System 2: Inspecting Database Constraints...</div>',
+                                                    unsafe_allow_html=True
+                                                )
+                                            else:
+                                                badge_placeholder.markdown(
+                                                    f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
+                                                    f'<div class="system2-badge">🔧 Querying TimescaleDB: <b>{tool_name}</b>...</div>',
+                                                    unsafe_allow_html=True
+                                                )
+                                        elif etype == "tool_result":
+                                            tool_name = html.escape(str(event.get("tool", "tool")))
                                             badge_placeholder.markdown(
                                                 f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
-                                                f'<div class="system2-badge">🔧 Querying {tool_name}...</div>',
+                                                f'<div class="system2-badge">📊 {tool_name} Telemetry Retrieved · Formulating Answer...</div>',
                                                 unsafe_allow_html=True
                                             )
                                         elif etype == "token":
                                             accumulated_text += event.get("content", "")
                                             message_placeholder.markdown(accumulated_text + "▌")
                                         elif etype == "done":
-                                            if "tool_calls" in event:
-                                                tool_calls = event["tool_calls"]
-                                            if "latency_ms" in event:
-                                                latency = event["latency_ms"]
-                                            s1_ms = event.get("system1_latency_ms", guard_latency)
+                                            tool_calls = event.get("tool_calls", [])
+                                            latency = event.get("latency_ms", 0.0)
+                                            active_model = event.get("model_name") or chosen_model or "OpenRouter Free"
+                                            short_model = html.escape(active_model.split("/")[-1] if "/" in active_model else active_model)
                                             if not tripwire:
                                                 badge_placeholder.markdown(
-                                                    f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {s1_ms:.1f}ms)</div> '
-                                                    f'<div class="system2-badge">🧠 System 2: Grounded ({len(tool_calls)} tools · {latency:.1f}ms)</div>',
+                                                    f'<div class="guard-badge">⚡ System 1: Clean Path ({provider} · {guard_latency:.1f}ms)</div> '
+                                                    f'<div class="system2-badge">🧠 System 2: Grounded ({short_model} · {len(tool_calls)} tools · {latency:.1f}ms)</div>',
                                                     unsafe_allow_html=True
                                                 )
-                                            if "response" in event and event["response"]:
-                                                accumulated_text = event["response"]
                                     except Exception:
                                         pass
 
                             message_placeholder.markdown(accumulated_text)
 
                             if tool_calls:
-                                with st.expander(f"🔍 Grounding Tool Inspections ({len(tool_calls)} calls)", expanded=True):
+                                with st.expander(f"🔍 Grounding Evidence ({len(tool_calls)} database queries inspected)", expanded=True):
                                     for tc in tool_calls:
-                                        st.write(f"**Executed Tool**: `{tc.get('tool')}`")
-                                        if "arguments" in tc:
-                                            st.write(f"Arguments: `{json.dumps(tc.get('arguments'))}`")
-                                        st.json(tc.get("result", {}))
+                                        st.markdown(f"**🔧 Executed Tool**: `{tc.get('tool')}`")
+                                        if tc.get("arguments"):
+                                            st.caption("Database Query Parameters:")
+                                            st.json(tc.get("arguments"))
+                                        if tc.get("result"):
+                                            st.caption("TimescaleDB Ground Truth Telemetry:")
+                                            st.json(tc.get("result"))
 
                             st.session_state.messages.append({
                                 "role": "assistant",
@@ -345,6 +414,7 @@ with tab_console:
                                 "tools": tool_calls,
                                 "tripwire": tripwire,
                                 "provider": provider,
+                                "model_name": active_model if not tripwire else provider,
                                 "system1_latency_ms": guard_latency,
                                 "latency_ms": latency
                             })

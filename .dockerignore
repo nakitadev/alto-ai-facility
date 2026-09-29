@@ -1,0 +1,59 @@
+# Git & Docker configuration
+.git
+.gitignore
+.dockerignore
+
+# Python byte-code & build artifacts
+__pycache__
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# Environments & secrets (CRITICAL: prevent secret leakage into images)
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+ENV/
+*.key
+*.pem
+
+# Data & database persistent mounts
+timescale_data/
+*.db
+*.sqlite3
+
+# Test & coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Generated evaluation run artifacts
+eval/results/
+
+# IDE, OS, & swap files
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+*~
+.agents
+
+# Non-runtime documentation & interview lessons (keeps image lean)
+assets/
+lessons/
+reference/
+MISSION.md
+NOTES.md
+RESOURCES.md
+WALKTHROUGH_AND_INTERVIEW_GUIDE.md

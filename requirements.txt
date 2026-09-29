@@ -10,3 +10,6 @@ pydantic-ai>=2.50.0
 logfire[fastapi]>=5.1.1
 sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+

@@ -1,40 +1,38 @@
-import datetime
-from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from sqlalchemy import select, update, func
 
 import logfire
-from backend.config import BACKEND_HOST, BACKEND_PORT, LOGFIRE_TOKEN, LOGFIRE_SERVICE_NAME
-
-# Initialize Logfire Distributed Observability
-logfire.configure(
-    service_name=LOGFIRE_SERVICE_NAME,
-    token=LOGFIRE_TOKEN,
-    send_to_logfire='if-token-present',
-    console=logfire.ConsoleOptions(min_log_level='info')
-)
-
+from backend.config import BACKEND_HOST, BACKEND_PORT, OPENROUTER_MODEL, FREE_OPENROUTER_MODELS
+from backend.schemas import ChatRequest, ResetChatRequest, ApprovalRequest, ModelsResponse
 from backend.database import (
     get_session,
     get_simulated_time_bounds,
     get_registered_machines
 )
 from backend.models import PendingAction
-from sqlalchemy import select, update, func
-from backend.agent.loop import run_agent_loop, stream_agent_loop, clear_session_history
+from backend.agent.core import FacilityAIClient
+from backend.agent.sse_handler import SSEHandler
 from backend.agent.cost_ledger import get_ledger_summary
+
+def get_ai_client(request: Request) -> FacilityAIClient:
+    """Dependency provider yielding the application-scoped FacilityAIClient instance."""
+    return request.app.state.ai_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ASGI Lifespan Startup: Non-blocking health check
+    # ASGI Lifespan Startup: Non-blocking health check & AI client connection pool initialization
     time_bounds = await get_simulated_time_bounds()
+    ai_client = FacilityAIClient()
+    await ai_client.start()
+    app.state.ai_client = ai_client
     print(f"[ASGI Server Ready] TimescaleDB connected. Telemetry days: {time_bounds.get('days_available', 0)}")
     logfire.info("ASGI Server Ready with Logfire tracing", days_available=time_bounds.get('days_available', 0))
     yield
-    print("[ASGI Server Shutdown] Graceful termination complete.")
+    await ai_client.close()
+    print("[ASGI Server Shutdown] Graceful termination complete. AI client connection pool closed.")
 
 app = FastAPI(
     title="Somchai Commercial HVAC Energy Assistant API",
@@ -55,17 +53,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-class ChatRequest(BaseModel):
-    message: str
-    conversation_id: Optional[str] = "somchai_control_session"
-
-class ResetChatRequest(BaseModel):
-    conversation_id: str
-
-class ApprovalRequest(BaseModel):
-    reviewer_name: str = "Somchai Thanakit"
-    notes: Optional[str] = "Authorized via Facility Operations Console."
 
 @app.get("/api/health")
 async def health_check():
@@ -88,33 +75,31 @@ async def time_bounds():
     """Returns active dataset temporal bounds asynchronously."""
     return await get_simulated_time_bounds()
 
-@app.post("/api/chat")
-async def chat_endpoint(request: ChatRequest):
-    """
-    Standard ASGI endpoint executing Dual-Process System 1 + System 2 agent loop.
-    """
-    if not request.message or not request.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-    
-    result = await run_agent_loop(
-        user_prompt=request.message,
-        conversation_id=request.conversation_id
-    )
-    return result
+@app.get("/api/models", response_model=ModelsResponse)
+async def list_models():
+    """Returns verified free OpenRouter models available for dynamic selection."""
+    return {
+        "models": FREE_OPENROUTER_MODELS,
+        "default": OPENROUTER_MODEL
+    }
 
+@app.post("/api/chat")
 @app.post("/api/chat/stream")
-async def chat_stream_endpoint(request: ChatRequest):
+async def chat_stream_endpoint(
+    request: ChatRequest,
+    client: FacilityAIClient = Depends(get_ai_client)
+):
     """
-    Native ASGI Server-Sent Events (SSE) streaming endpoint.
-    Emits token deltas in real-time as the LLM generates reasoning and tool calls.
+    ASGI Server-Sent Events (SSE) streaming endpoint via FacilityAIClient.
     """
     if not request.message or not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
     
     return StreamingResponse(
-        stream_agent_loop(
+        client.chat_stream(
             user_prompt=request.message,
-            conversation_id=request.conversation_id
+            conversation_id=request.conversation_id,
+            model=request.model
         ),
         media_type="text/event-stream",
         headers={
@@ -124,12 +109,16 @@ async def chat_stream_endpoint(request: ChatRequest):
         }
     )
 
+
 @app.post("/api/chat/reset")
-async def reset_chat_endpoint(request: ResetChatRequest):
+async def reset_chat_endpoint(
+    request: ResetChatRequest,
+    client: FacilityAIClient = Depends(get_ai_client)
+):
     """
     Clears the in-memory multi-turn message history for a given conversation_id.
     """
-    clear_session_history(request.conversation_id)
+    client.clear_session_history(request.conversation_id)
     return {"status": "cleared", "conversation_id": request.conversation_id}
 
 @app.get("/api/pending_actions")

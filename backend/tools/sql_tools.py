@@ -1,83 +1,39 @@
-import datetime
-import time
-import re
-from zoneinfo import ZoneInfo
-from typing import Dict, Any, Optional, List
-from backend.database import get_session
-from backend.models import Machine, SensorReading, AIDecision, PendingAction
+from typing import Dict, Any, Optional
 from sqlalchemy import select, func, cast, Date, Numeric, insert
-from backend.rag.retriever import retriever
-from backend.config import DEFAULT_TIMEZONE
 
-BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
-UTC_TZ = ZoneInfo("UTC")
+from backend.database import get_session
+from backend.models import SensorReading, AIDecision, PendingAction
+from backend.utils.timeutils import parse_bangkok_time, get_base_date
 
-_BASE_DATE_CACHE = None
-_CACHE_TIME = 0.0
-
-async def get_base_date() -> Optional[datetime.date]:
+# Tool 0: Telemetry Coverage & Freshness Check (Grounding & Boundary Tool)
+async def query_data_coverage(machine_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    Dynamically anchors Day 1 to the actual earliest sensor reading in TimescaleDB.
-    Enables arbitrary multi-week, monthly, or historical datasets without hardcoding.
-    Refreshes cache periodically or upon database re-seeding.
+    Inspects available telemetry date ranges, sensor freshness, and monitored metrics.
+    Use this tool when answering questions about data availability, date boundaries,
+    staleness/freshness of current readings, or unmonitored metrics like humidity.
     """
-    global _BASE_DATE_CACHE, _CACHE_TIME
-    now = time.time()
-    if _BASE_DATE_CACHE and (now - _CACHE_TIME < 60.0):
-        return _BASE_DATE_CACHE
-    try:
-        from backend.database import get_simulated_time_bounds
-        bounds = await get_simulated_time_bounds()
-        if bounds.get("has_data") and "min_bkk" in bounds and bounds["min_bkk"] != "N/A":
-            date_str = bounds["min_bkk"].split(" ")[0]
-            _BASE_DATE_CACHE = datetime.date.fromisoformat(date_str)
-            _CACHE_TIME = now
-            return _BASE_DATE_CACHE
-    except Exception:
-        pass
-    return None
+    from backend.database import get_simulated_time_bounds, get_registered_machines
+    bounds = await get_simulated_time_bounds()
+    machines = await get_registered_machines()
 
-async def parse_bangkok_time(time_str: str) -> datetime.datetime:
-    """
-    Parses various date/time formats asynchronously and returns a UTC datetime.
-    Supports:
-      - 'Day N HH:MM' offsets from earliest database record
-      - ISO-8601 formats and YYYY-MM-DD HH:MM:SS
-    """
-    time_str = time_str.strip()
+    latest_reading = None
+    if bounds.get("has_data") and bounds.get("max_bkk"):
+        latest_reading = {
+            "latest_reading_bkk": bounds["max_bkk"],
+            "simulated_current_time_bkk": bounds.get("current_time_bkk") or bounds.get("simulated_now_bkk")
+        }
 
-    # Check for "Day N HH:MM" (derived from actual DB start)
-    m_day = re.match(r"(?i)day\s*(\d+)(?:\s+(\d{1,2}):(\d{2}))?", time_str)
-    if m_day:
-        day_num = int(m_day.group(1))
-        hour = int(m_day.group(2)) if m_day.group(2) else 0
-        minute = int(m_day.group(3)) if m_day.group(3) else 0
-        base_date = await get_base_date()
-        if base_date:
-            target_date = base_date + datetime.timedelta(days=day_num - 1)
-            bkk_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=BANGKOK_TZ)
-            return bkk_dt.astimezone(UTC_TZ)
-
-    # Try standard ISO or standard format
-    clean_str = time_str.replace("Z", "+00:00")
-    try:
-        dt = datetime.datetime.fromisoformat(clean_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=BANGKOK_TZ)
-        return dt.astimezone(UTC_TZ)
-    except Exception:
-        # Fallback parsing YYYY-MM-DD HH:MM:SS
-        parts = clean_str.split(" ")
-        date_parts = [int(p) for p in parts[0].split("-")]
-        hour, minute, second = 0, 0, 0
-        if len(parts) > 1:
-            time_parts = [int(p) for p in parts[1].split(":")]
-            hour = time_parts[0]
-            minute = time_parts[1]
-            if len(time_parts) > 2:
-                second = time_parts[2]
-        bkk_dt = datetime.datetime(date_parts[0], date_parts[1], date_parts[2], hour, minute, second, tzinfo=BANGKOK_TZ)
-        return bkk_dt.astimezone(UTC_TZ)
+    return {
+        "has_data": bounds.get("has_data", False),
+        "days_available": bounds.get("days_available", 0),
+        "min_bkk": bounds.get("min_bkk", "N/A"),
+        "max_bkk": bounds.get("max_bkk", "N/A"),
+        "latest_sensor_reading": latest_reading,
+        "monitored_metrics": ["power_kw (kW)", "temperature (°C)", "setpoint (°C)", "speed (%)", "status (ON/OFF)"],
+        "unmonitored_metrics": ["humidity", "co2", "air_quality", "pressure", "water_flow"],
+        "machine_count": len(machines),
+        "target_machine": machine_name or "ALL_FACILITY_MACHINES"
+    }
 
 # Tool 1: Energy Aggregates (Async with SQLAlchemy)
 async def query_energy_aggregates(start_time: str, end_time: str, machine_name: Optional[str] = None, group_by: str = "total") -> Dict[str, Any]:
@@ -267,18 +223,6 @@ async def query_ai_decisions(start_time: str, end_time: str, machine_name: Optio
             "decisions": decisions
         }
 
-# Tool 4: Search Documents (Async)
-async def search_docs(query: str, document_filter: str = "all") -> Dict[str, Any]:
-    """
-    Retrieves policy rules, schedules, comfort bands, and maintenance notes from docs/.
-    """
-    chunks = retriever.search(query=query, doc_filter=document_filter, top_k=3)
-    return {
-        "query": query,
-        "results_found": len(chunks),
-        "chunks": chunks
-    }
-
 # Tool 5: Propose Action (Problem 3 Option A - Async with SQLAlchemy)
 async def propose_control_action(machine_name: str, proposed_action: str, reasoning: str, parameter_value: str = "N/A") -> Dict[str, Any]:
     """
@@ -336,99 +280,3 @@ async def propose_control_action(machine_name: str, proposed_action: str, reason
         "status": "PENDING_CONFIRMATION",
         "message": f"Proposal #{proposal_id} logged for {clean_machine}. Awaiting Somchai's authorization."
     }
-
-
-# Tool Registry for OpenAI / OpenRouter function calling
-TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "query_energy_aggregates",
-            "description": "Calculates total or daily energy consumption in kWh = sum(power_kw * 5/60) across machines or zones for a Bangkok time range.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "start_time": {"type": "string", "description": "Start time in Bangkok time (e.g., 'Day 2 00:00' or 'YYYY-MM-DD HH:MM')."},
-                    "end_time": {"type": "string", "description": "End time in Bangkok time (e.g., 'Day 2 23:59' or 'YYYY-MM-DD HH:MM')."},
-                    "machine_name": {"type": "string", "description": "Optional machine identifier (e.g., 'AC-L1'). Omit for whole building."},
-                    "group_by": {"type": "string", "enum": ["total", "day", "machine"], "description": "Granularity of aggregation."}
-                },
-                "required": ["start_time", "end_time"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_sensor_readings",
-            "description": "Queries statistical summary of machine sensor readings (temperature, power, setpoint, fan speed).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "machine_name": {"type": "string", "description": "Machine identifier (e.g. 'AC-L1', 'AC-S5')."},
-                    "start_time": {"type": "string", "description": "Start Bangkok time (e.g. 'Day 5 08:00')."},
-                    "end_time": {"type": "string", "description": "End Bangkok time (e.g. 'Day 5 18:00')."},
-                    "metric": {"type": "string", "enum": ["temperature", "power_kw", "setpoint", "speed", "all"], "default": "temperature"}
-                },
-                "required": ["machine_name", "start_time", "end_time"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_ai_decisions",
-            "description": "Searches the log of automated actions taken (TURN ON, TURN OFF, SET TEMP).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "start_time": {"type": "string", "description": "Start time in Bangkok time (e.g. 'Day 6 22:00')."},
-                    "end_time": {"type": "string", "description": "End time in Bangkok time (e.g. 'Day 7 06:00')."},
-                    "machine_name": {"type": "string", "description": "Optional machine filter."},
-                    "action": {"type": "string", "enum": ["TURN ON", "TURN OFF", "SET TEMP", "ANY"], "default": "ANY"}
-                },
-                "required": ["start_time", "end_time"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_docs",
-            "description": "Searches facility operator manual, AI control policy, building schedule, and maintenance logs.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Keywords or search question (e.g. 'AC-S3 turn off rule' or 'overnight schedule')."},
-                    "document_filter": {"type": "string", "enum": ["all", "ai_control_policy", "operator_manual", "building_schedule", "maintenance_log"], "default": "all"}
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "propose_control_action",
-            "description": "Proposes an HVAC control action requiring human confirmation (Problem 3 Option A). Assistant cannot directly execute writes.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "machine_name": {"type": "string", "description": "Machine to control."},
-                    "proposed_action": {"type": "string", "enum": ["TURN OFF", "TURN ON", "SET TEMP"]},
-                    "parameter_value": {"type": "string", "description": "Optional parameter (e.g. '24°C')."},
-                    "reasoning": {"type": "string", "description": "Why this action is recommended."}
-                },
-                "required": ["machine_name", "proposed_action", "reasoning"]
-            }
-        }
-    }
-]
-
-TOOL_MAP = {
-    "query_energy_aggregates": query_energy_aggregates,
-    "query_sensor_readings": query_sensor_readings,
-    "query_ai_decisions": query_ai_decisions,
-    "search_docs": search_docs,
-    "propose_control_action": propose_control_action
-}

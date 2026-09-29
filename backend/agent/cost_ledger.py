@@ -4,7 +4,6 @@ Powered by SQLAlchemy 2.0 AsyncSession.
 """
 
 import json
-from decimal import Decimal
 from typing import Dict, Any, List
 from sqlalchemy import select, func, insert
 from backend.database import get_session

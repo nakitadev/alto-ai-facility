@@ -5,7 +5,7 @@ Zero synchronous blocking drivers or legacy shims.
 """
 
 from zoneinfo import ZoneInfo
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from typing import Dict, Any, List, AsyncGenerator
 from contextlib import asynccontextmanager
 
 from sqlalchemy import select, func
@@ -15,7 +15,6 @@ from backend.config import DATABASE_URL, DEFAULT_TIMEZONE
 from backend.models import Machine, SensorReading
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
-UTC_TZ = ZoneInfo("UTC")
 
 def _format_db_url(url: str) -> str:
     if url.startswith("postgresql://"):
@@ -48,30 +47,6 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 # ---------------------------------------------------------
-# Native SQLAlchemy Query Execution Helpers
-# ---------------------------------------------------------
-async def fetch_all(stmt) -> List[Dict[str, Any]]:
-    """Executes a SQLAlchemy select statement and returns rows as dictionaries."""
-    async with get_session() as session:
-        result = await session.execute(stmt)
-        return [dict(r) for r in result.mappings().all()]
-
-async def fetch_one(stmt) -> Optional[Dict[str, Any]]:
-    """Executes a SQLAlchemy select statement and returns a single row dictionary."""
-    async with get_session() as session:
-        result = await session.execute(stmt)
-        row = result.mappings().first()
-        return dict(row) if row else None
-
-async def execute_stmt(stmt, commit: bool = True) -> Any:
-    """Executes an insert/update/delete statement."""
-    async with get_session() as session:
-        result = await session.execute(stmt)
-        if commit:
-            await session.commit()
-        return result
-
-# ---------------------------------------------------------
 # Dynamic Operational Bounds & Machine Registry
 # ---------------------------------------------------------
 async def get_simulated_time_bounds() -> Dict[str, Any]:
@@ -84,7 +59,10 @@ async def get_simulated_time_bounds() -> Dict[str, Any]:
             func.min(SensorReading.time).label("min_time"),
             func.max(SensorReading.time).label("max_time")
         )
-        row = await fetch_one(stmt)
+        async with get_session() as session:
+            result = await session.execute(stmt)
+            row = result.mappings().first()
+
         if not row or not row.get("min_time"):
             return {
                 "has_data": False,

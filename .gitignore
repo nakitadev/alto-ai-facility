@@ -2,24 +2,40 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
-# Environments & secrets
+# Environments & secrets (no hardcoded secrets)
 .env
-.venv
-env/
+.env.*
+!.env.example
+.venv/
 venv/
+env/
 ENV/
 *.key
+*.pem
 
 # Data & database mounts
 timescale_data/
 *.db
 *.sqlite3
 
+# Testing & coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Generated evaluation run outputs
+eval/results/
+
 # IDE & OS files
 .vscode/
 .idea/
 .DS_Store
 *.swp
+*.swo
+*~
 
-.agents
+# Custom agent settings
+.agents/

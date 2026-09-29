@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, func, cast, Numeric
 from backend.database import get_session, get_simulated_time_bounds
 from backend.models import SensorReading, AIDecision
-from backend.agent.tools import parse_bangkok_time
+from backend.tools.sql_tools import parse_bangkok_time
 from backend.config import DEFAULT_TIMEZONE
 
 BANGKOK_TZ = ZoneInfo(DEFAULT_TIMEZONE)
